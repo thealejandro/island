@@ -644,7 +644,7 @@ fn shoot(app: &App, i: usize, name: &str) {
         }
         let m = q.margin * s;
         let (l, r, b) = (body.x - m, body.x + body.width + m, body.height + m);
-        let (mut outside, mut far) = (0u32, 0.0f32);
+        let (mut outside, mut far, mut at) = (0u32, 0.0f32, (0, 0));
         for y in 0..g.h {
             for x in 0..g.w {
                 let p = ((y * g.w + x) * 4) as usize;
@@ -658,14 +658,16 @@ fn shoot(app: &App, i: usize, name: &str) {
                 let dist = (l - fx).max(fx - r).max(fy - b);
                 if dist > 0.0 {
                     outside += 1;
-                    far = far.max(dist);
+                    if dist >= far {
+                        (far, at) = (dist, (x, y));
+                    }
                 }
             }
         }
         if outside > 0 {
             q.fail(format!(
-                "2/3 dibujo fuera del cuerpo en {name}: {outside} px, hasta {:.0} px fuera",
-                far
+                "2/3 dibujo fuera del cuerpo en {name}: {outside} px, hasta {:.1} px fuera (en {}, {}; cuerpo x {:.1}–{:.1}, alto {:.1})",
+                far, at.0, at.1, body.x, body.x + body.width, body.height
             ));
         }
     });

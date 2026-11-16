@@ -1277,7 +1277,7 @@ impl Renderer {
             if b == Button::PlayPause {
                 // On a disc in the cover's color, the icon in what reads.
                 self.tinted_rounded(r, r.width / 2.0, theme, a);
-                self.icon(icon, r, 22.0, color::ink_on(theme), alpha);
+                self.icon(icon, r, 22.0, color::ink_on(theme), a);
             } else {
                 self.icon(icon, r, size, WHITE, a);
             }
@@ -1374,6 +1374,12 @@ impl Renderer {
         let (new_dy, old_dy) = (SWAP_SLIDE * (1.0 - t), -SWAP_SLIDE * t);
         // The cover and bars stay put when only the line changes.
         let same_song = s.notice.is_none() && !matches!(before, Some(Before::Notice(_)));
+        // A toast is laid out for its own, bigger body: one coming or going
+        // doesn't cross-fade with what is laid out for the other (it would
+        // show, faint and out of place, as the body grows or shrinks).
+        let toast = |b: &Before| matches!(b, Before::Notice(n) if n.toast);
+        let toast_now = s.notice.is_some_and(|n| n.toast);
+        let before = before.filter(|b| toast(b) == toast_now);
         match before {
             Some(Before::Notice(n)) => self.peek_notice(&n, s, dx, old_dy, old_a),
             Some(Before::Line(line)) if !same_song => {
@@ -1551,10 +1557,20 @@ impl Renderer {
     /// soft wide one, as bright as `a` (px, from the body's top-left).
     fn ring(&self, geo: &ID2D1PathGeometry, color: [f32; 3], a: f32, scale: f32) {
         let [r, g, b] = color;
+        // Round joins: where the outline turns back on itself (an ear's tip,
+        // on the screen's edge) a miter would stick out past the stroke.
+        let props = D2D1_STROKE_STYLE_PROPERTIES1 {
+            lineJoin: windows::Win32::Graphics::Direct2D::D2D1_LINE_JOIN_ROUND,
+            ..Default::default()
+        };
+        let style = unsafe { self.factory.CreateStrokeStyle(&props, None) }
+            .and_then(|s| s.cast::<windows::Win32::Graphics::Direct2D::ID2D1StrokeStyle>())
+            .ok();
         unsafe {
             for (width, k) in [(6.0, 0.18), (1.6, 1.0)] {
                 self.ink.SetColor(&D2D1_COLOR_F { r, g, b, a: a * k });
-                self.dc.DrawGeometry(geo, &self.ink, width * scale, None);
+                self.dc
+                    .DrawGeometry(geo, &self.ink, width * scale, style.as_ref());
             }
         }
     }
@@ -1947,7 +1963,24 @@ impl Renderer {
                     }
                 }
 
-                // The content, in DIPs, clipped to the body.
+                // The content, in DIPs, clipped to the body's outline (its
+                // rounded corners and ears too), taken where the body is.
+                let mask = D2D1_LAYER_PARAMETERS1 {
+                    contentBounds: D2D_RECT_F {
+                        left: f32::MIN,
+                        top: f32::MIN,
+                        right: f32::MAX,
+                        bottom: f32::MAX,
+                    },
+                    geometricMask: std::mem::ManuallyDrop::new(geo.cast::<ID2D1Geometry>().ok()),
+                    maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                    maskTransform: Matrix3x2::identity(),
+                    opacity: 1.0,
+                    opacityBrush: std::mem::ManuallyDrop::new(None),
+                    layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+                };
+                self.dc.SetTransform(&Matrix3x2::translation(bx, by));
+                self.dc.PushLayer(&mask, None::<&ID2D1Layer>);
                 let base = affine(s.scale, bx + s.inset, by);
                 self.dc.SetTransform(&base);
                 self.dc.PushAxisAlignedClip(
@@ -1995,6 +2028,8 @@ impl Renderer {
                 }
                 self.view = (0.0, 1.0, 0.0);
                 self.dc.PopAxisAlignedClip();
+                self.dc.PopLayer();
+                drop(std::mem::ManuallyDrop::into_inner(mask.geometricMask));
 
                 self.dc.PopAxisAlignedClip();
                 let ended = self.dc.EndDraw(None, None);
@@ -2018,6 +2053,7 @@ impl Renderer {
                         &self.dcomp,
                         &self.dc,
                         px,
+                        s.body,
                         k * s.island_scale,
                         color,
                         alpha,

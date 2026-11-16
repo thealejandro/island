@@ -44,6 +44,9 @@ struct Bar {
 }
 
 pub struct Bars {
+    /// Holds the three, clipped to the island's body: while it grows they
+    /// are already where it will end, and must not show outside it.
+    group: IDCompositionVisual,
     bars: [Bar; 3],
     /// The bars' picture: size in px and color it was painted with.
     surface: Option<(IDCompositionSurface, u32, u32, [f32; 3])>,
@@ -52,6 +55,8 @@ pub struct Bars {
 
 impl Bars {
     pub fn new(dcomp: &IDCompositionDevice, root: &IDCompositionVisual) -> Result<Self> {
+        let group = unsafe { dcomp.CreateVisual()? };
+        unsafe { root.AddVisual(&group, true, None::<&IDCompositionVisual>)? };
         let bar = || -> Result<Bar> {
             unsafe {
                 let visual = dcomp.CreateVisual()?;
@@ -60,7 +65,7 @@ impl Bars {
                 visual.SetTransform(&scale)?;
                 visual.SetEffect(&effect)?;
                 effect.SetOpacity2(0.0)?;
-                root.AddVisual(&visual, true, None::<&IDCompositionVisual>)?;
+                group.AddVisual(&visual, true, None::<&IDCompositionVisual>)?;
                 Ok(Bar {
                     visual,
                     scale,
@@ -70,6 +75,7 @@ impl Bars {
         };
         Ok(Self {
             bars: [bar()?, bar()?, bar()?],
+            group,
             surface: None,
             playing: None,
         })
@@ -155,14 +161,16 @@ impl Bars {
         Ok(())
     }
 
-    /// Puts the bars in `rect` (px, in the window) at `alpha`. Only a change
-    /// between playing and paused touches the animations.
+    /// Puts the bars in `rect` (px, in the window) at `alpha`, shown only
+    /// inside `body`. Only a change between playing and paused touches the
+    /// animations.
     #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         dcomp: &IDCompositionDevice,
         dc: &ID2D1DeviceContext,
         rect: Rect,
+        body: Rect,
         scale: f32,
         color: [f32; 3],
         alpha: f32,
@@ -175,6 +183,12 @@ impl Bars {
         self.paint(dcomp, dc, w as u32, h as u32, color)?;
         let top = (rect.y + (rect.height - h) / 2.0).round();
         unsafe {
+            self.group.SetClip2(&D2D_RECT_F {
+                left: body.x,
+                top: body.y,
+                right: body.x + body.width,
+                bottom: body.y + body.height,
+            })?;
             for (i, bar) in self.bars.iter().enumerate() {
                 let x = (rect.x + i as f32 * STEP * scale).round();
                 bar.visual.SetOffsetX2(x)?;

@@ -409,7 +409,9 @@ fn openness(sf: &Surface, k: f32, peek_h: f32) -> f32 {
 fn alphas(sf: &Surface, k: f32, peek_h: f32) -> [f32; 3] {
     let h = sf.height.value;
     let closed_h = CLOSED.1 * k;
-    let open = ((h - closed_h) / (OPEN.1 - closed_h)).clamp(0.0, 1.0);
+    // From the view it grows from: a tall glance (a notification's) isn't
+    // part open, or the player would show, faint, behind it.
+    let open = openness(sf, k, peek_h);
     // The closed content leaves fast; the open one comes in once there
     // is room for it. It shrinks with the body (scaled to it), so
     // closing it can stay until the body is small, while the cover
@@ -452,10 +454,11 @@ fn peek_unscaled(notice: &Option<Notice>, glance_on: bool, song_w: f32) -> (f32,
         island_core::notifications::SIZE
     } else if level && !glance_on {
         glance::LEVEL
-    } else if notice.is_some() {
-        layout::PEEK
-    } else {
+    } else if level || notice.is_none() {
+        // Over the lyrics' glance a level takes that one's size.
         (song_w, layout::PEEK.1)
+    } else {
+        layout::PEEK
     }
 }
 
@@ -1755,6 +1758,17 @@ impl App {
             self.song = song;
             self.on_bluetooth = volume::on_bluetooth();
             if !first {
+                // A notice gives way to the new song in place. (Song to song,
+                // the body's own change carries it: `Before::Song` would
+                // draw the new one.)
+                let b = self.showing();
+                if matches!(b, Before::Notice(_)) {
+                    let k = self.settings.island_scale;
+                    for i in 0..self.surfaces.len() {
+                        let peek_h = self.peek_unscaled_at(i).1 * k;
+                        swap_from(&mut self.surfaces[i], k, peek_h, b.clone());
+                    }
+                }
                 self.notice = None;
                 self.set_peek(true);
             }
