@@ -736,6 +736,11 @@ impl Renderer {
             for s in &o.segments {
                 match *s {
                     Segment::Line(p) => sink.AddLine(v(p)),
+                    Segment::Cubic { c1, c2, to } => sink.AddBezier(&D2D1_BEZIER_SEGMENT {
+                        point1: v(c1),
+                        point2: v(c2),
+                        point3: v(to),
+                    }),
                     Segment::Arc {
                         to,
                         radius,

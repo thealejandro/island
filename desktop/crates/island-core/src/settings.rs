@@ -13,7 +13,7 @@ use crate::focus::Lengths;
 use crate::media::{self, SongText, TextAlign};
 use crate::monitor::MonitorChoice;
 use crate::pages::Page;
-use crate::shape::Placement;
+use crate::shape::{Placement, Style};
 
 /// Bigger than any real settings file: anything past it is not read.
 pub const MAX_FILE: usize = 64 * 1024;
@@ -98,6 +98,8 @@ impl IslandColor {
 pub struct Settings {
     pub language: Language,
     pub placement: Placement,
+    /// The silhouette's corners: smooth (Apple's) or classic.
+    pub shape: Style,
     pub monitor: MonitorChoice,
     pub text_align: TextAlign,
     pub song_text: SongText,
@@ -154,6 +156,7 @@ impl Default for Settings {
         Self {
             language: Language::default(),
             placement: Placement::default(),
+            shape: Style::default(),
             monitor: MonitorChoice::default(),
             text_align: TextAlign::default(),
             song_text: SongText::default(),
@@ -183,6 +186,7 @@ impl Default for Settings {
 pub const TEMPLATE: &str = r#"{
   "language": "",
   "placement": "top",
+  "shape": "smooth",
   "monitor": "primary",
   "textAlign": "center",
   "songText": "title-artist",
@@ -243,6 +247,7 @@ impl Settings {
             placement: text("placement")
                 .and_then(Placement::parse)
                 .unwrap_or(d.placement),
+            shape: text("shape").and_then(Style::parse).unwrap_or(d.shape),
             // A screen's number may come as a number or as text; "all" or
             // a list ([1, 3] in JSON, "1,3" as text) puts an island on each.
             monitor: match o.get("monitor") {
@@ -571,6 +576,13 @@ mod tests {
         // Nothing usable there: a new object.
         let text = set("nope", "openLyrics", json!(false));
         assert!(!parse(&text).open_lyrics);
+    }
+
+    #[test]
+    fn shape_by_name() {
+        assert_eq!(parse(r#"{"shape": "classic"}"#).shape, Style::Classic);
+        assert_eq!(parse(r#"{"shape": "wavy"}"#).shape, Style::Smooth);
+        assert_eq!(parse(TEMPLATE).shape, Style::Smooth);
     }
 
     #[test]

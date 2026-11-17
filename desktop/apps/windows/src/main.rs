@@ -226,6 +226,7 @@ const MENU_INSTALL: u32 = 7;
 const MENU_PORTABLE: u32 = 8;
 const MENU_UPDATE: u32 = 9;
 const MENU_NOT_NOW: u32 = 10;
+const MENU_SMOOTH: u32 = 11;
 const MENU_CLASS: PCWSTR = w!("IslandMenu");
 
 /// The menu window, while it is open.
@@ -733,6 +734,7 @@ impl App {
     fn draw_surface(&mut self, i: usize) {
         let k = self.settings.island_scale;
         let placement = self.placement;
+        let shape_style = self.settings.shape;
         let now = self.now_ms();
         let peek_u = self.peek_unscaled_at(i);
         let peek_h = peek_u.1 * k;
@@ -755,11 +757,7 @@ impl App {
         let (w, h) = (sf.width.value.max(0.0) * s, sf.height.value.max(0.0) * s);
         let (ear, radius) = (EAR * s, RADIUS * s);
         let body = shape::body_rect(placement, sf.window.width, w, h, ear, sf.width.is_settled());
-        let outline = if placement.hangs() {
-            shape::hanging(w, h, radius, ear)
-        } else {
-            shape::floating(w, h, radius)
-        };
+        let outline = shape::outline(shape_style, placement.hangs(), w, h, radius, ear, s);
         // The pointer only reaches the island inside its body, ears left
         // out; everywhere else, clicks go to what is below. The region takes
         // the bigger of the size now and the target, so it changes only when
@@ -2109,6 +2107,15 @@ impl App {
                     self.settings.notification_glance,
                 ),
             ),
+            (
+                MENU_SMOOTH,
+                row(
+                    toggle,
+                    t.smooth_shape,
+                    self.settings.shape == shape::Style::Smooth,
+                    true,
+                ),
+            ),
             (0, row(line, "", false, false)),
             (
                 MENU_STARTUP,
@@ -2119,7 +2126,7 @@ impl App {
             (MENU_QUIT, row(action, t.quit, false, true)),
         ];
         if self.settings.update_check {
-            rows.insert(6, update);
+            rows.insert(7, update);
         }
         rows
     }
@@ -2426,6 +2433,15 @@ impl App {
             }
             MENU_STARTUP => {
                 let _ = startup::set(!startup::is_on());
+                return;
+            }
+            MENU_SMOOTH => {
+                file.shape = match self.settings.shape {
+                    shape::Style::Smooth => shape::Style::Classic,
+                    shape::Style::Classic => shape::Style::Smooth,
+                };
+                let _ = settings_file::set("shape", Value::String(file.shape.name().into()));
+                self.apply(file);
                 return;
             }
             MENU_QUIT => {
