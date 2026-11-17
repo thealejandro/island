@@ -5,7 +5,9 @@ Omarchy plugin; this folder is a separate Rust workspace.
 
 - `crates/island-core`: platform-neutral logic (lyrics, texts, settings).
 - `apps/windows`: the Windows app (Win32 + WinRT through windows-rs).
-- `apps/macos`: later (#18).
+- `apps/macos`: the macOS app (AppKit through objc2), for Macs without a
+  notch (#18). A first slice: the silhouette, the springs and the time.
+  `cargo run -p island-macos`; right click on the island to quit.
 
 Plan and progress: #64.
 
