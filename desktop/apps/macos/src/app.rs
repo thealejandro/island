@@ -79,6 +79,10 @@ define_class!(
                         path.lineToPoint(at(to));
                         from = to;
                     }
+                    Segment::Cubic { c1, c2, to } => {
+                        path.curveToPoint_controlPoint1_controlPoint2(at(to), at(c1), at(c2));
+                        from = to;
+                    }
                     Segment::Arc { to, radius, clockwise } => {
                         let corner = arc_corner(from, to, clockwise);
                         path.appendBezierPathWithArcFromPoint_toPoint_radius(
