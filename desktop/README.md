@@ -110,6 +110,8 @@ that isn't valid JSON is ignored until it is fixed.
 | `islandScale` | 0.8 to 1.4 | `1.0` |
 | `accent` | `system`, `white`, `theme`, or a color like `#ff8000` (the glances' levels and logo-less notifications; a color too dark to see on black is lightened to a 3:1 contrast) | `system` |
 | `islandColor` | `black` (like a notch), `theme`, or a color like `#1e2a3a` (one too light for the white text is darkened to a 4.5:1 contrast) | `black` |
+| `animations` | `system` (as Windows' "Animation effects"), `on`, `off` (no wobble, crossfades, ring or comet: the island goes straight to its size) | `system` |
+| `hideInFullScreen` | `true`, `false` (hides the island on a screen while an app is in full screen there; a notification's glance still comes out if `notificationsInFullScreen` allows it) | `true` |
 | `defaultPage` | `home`, `focus` | `home` |
 | `focusMinutes` | 5 to 120 | `25` |
 | `breakMinutes` | 1 to 30 | `5` |

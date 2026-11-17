@@ -110,6 +110,62 @@ static ANCHOR: AtomicIsize = AtomicIsize::new(0);
 /// A layout is asked for and not done yet: the screens changing sends each
 /// island the same messages, and one layout is enough for all.
 static LAYOUT_PENDING: AtomicBool = AtomicBool::new(false);
+/// The island moves with springs and flourishes: the `animations` setting,
+/// with "system" read from Windows (again on each settings change).
+static MOTION: AtomicBool = AtomicBool::new(true);
+
+fn motion() -> bool {
+    MOTION.load(Relaxed)
+}
+
+fn set_motion(a: island_core::settings::Animations) {
+    MOTION.store(a.on(animations_on()), Relaxed);
+}
+
+/// Explorer's word to an island: an app went full screen on its screen
+/// (`lp` not 0), or left it.
+const WM_APP_APPBAR: u32 = WM_APP + 20;
+
+/// Each island's window is an appbar that takes no room (no ABM_SETPOS):
+/// only so that Explorer tells it of full-screen apps, no polling.
+fn appbar(hwnd: HWND, add: bool) {
+    use windows::Win32::UI::Shell::{ABM_NEW, ABM_REMOVE, APPBARDATA, SHAppBarMessage};
+    let mut d = APPBARDATA {
+        cbSize: size_of::<APPBARDATA>() as u32,
+        hWnd: hwnd,
+        uCallbackMessage: WM_APP_APPBAR,
+        ..Default::default()
+    };
+    unsafe {
+        SHAppBarMessage(if add { ABM_NEW } else { ABM_REMOVE }, &mut d);
+    }
+}
+
+/// The window in front covers the screen `mon` whole (the desktop doesn't
+/// count): what Explorer's word is checked against, as it may come to the
+/// islands of every screen.
+fn full_screen_on(mon: HMONITOR, m: &Monitor) -> bool {
+    use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONULL, MonitorFromWindow};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetShellWindow, GetWindowRect,
+    };
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.is_invalid() || fg == GetShellWindow() {
+            return false;
+        }
+        let mut r = RECT::default();
+        if GetWindowRect(fg, &mut r).is_err() || MonitorFromWindow(fg, MONITOR_DEFAULTTONULL) != mon
+        {
+            return false;
+        }
+        let s = m.rect;
+        r.left as f32 <= s.x
+            && r.top as f32 <= s.y
+            && r.right as f32 >= s.x + s.width
+            && r.bottom as f32 >= s.y + s.height
+    }
+}
 
 /// Asks for one layout, soon: screens added, removed, moved or rescaled,
 /// or the taskbar moved.
@@ -280,8 +336,8 @@ struct MenuWindow {
     flip: Option<(usize, bool, Instant)>,
 }
 
-/// Windows' "Animation effects" (Settings, Accessibility): off, the menu
-/// shows at once and its switches jump.
+/// Windows' "Animation effects" (Settings, Accessibility), for the
+/// `animations` setting's "system".
 fn animations_on() -> bool {
     let mut on = BOOL(1);
     unsafe {
@@ -336,6 +392,8 @@ struct Surface {
     peek_most: f32,
     /// What this island's glance is changing from in place, and since when.
     swap: Option<(Before, Instant)>,
+    /// An app is in full screen on this island's screen.
+    full: bool,
 }
 
 impl Surface {
@@ -358,6 +416,7 @@ impl Surface {
             )
         }
         .ok()?;
+        appbar(hwnd, true);
         Some(Self {
             hwnd,
             mon,
@@ -380,6 +439,7 @@ impl Surface {
             open_width: layout::OPEN_WIDTH,
             peek_most: layout::PEEK.0,
             swap: None,
+            full: false,
         })
     }
 
@@ -531,7 +591,8 @@ fn swap_from(sf: &mut Surface, k: f32, peek_h: f32, before: Before) {
         && sf.height.target > CLOSED.1 * k
         && (sf.height.value - sf.height.target).abs() < 0.5
         && alphas(sf, k, peek_h)[1] > 0.99;
-    if !at_rest {
+    // Animations off: the new content is just there.
+    if !at_rest || !motion() {
         return;
     }
     sf.swap = Some((before, Instant::now()));
@@ -649,6 +710,9 @@ struct App {
     notifications: Option<notifications::Notifications>,
     /// When the last notification arrived: its ring beats for a moment.
     pulse: Option<Instant>,
+    /// A notification's glance shows over full-screen apps: the islands
+    /// hidden there come out until it is gone.
+    full_glance: bool,
 }
 
 thread_local! {
@@ -1220,6 +1284,29 @@ impl App {
         self.notify(n, PEEK_MS);
     }
 
+    /// An app went full screen on island `i`'s screen, or left it.
+    fn full_screen(&mut self, i: usize, on: bool) {
+        if let Some(sf) = self.surfaces.get_mut(i) {
+            sf.full = on;
+        }
+        self.show_surfaces();
+    }
+
+    /// Hides the islands under a full-screen app (`hideInFullScreen`), save
+    /// while a notification's glance shows over it; shows the rest.
+    fn show_surfaces(&self) {
+        use windows::Win32::UI::WindowsAndMessaging::{IsWindowVisible, SW_HIDE, SW_SHOWNA};
+        let hide_on = self.settings.hide_in_full_screen && !self.full_glance;
+        for sf in &self.surfaces {
+            let hide = hide_on && sf.full;
+            unsafe {
+                if IsWindowVisible(sf.hwnd).as_bool() == hide {
+                    let _ = ShowWindow(sf.hwnd, if hide { SW_HIDE } else { SW_SHOWNA });
+                }
+            }
+        }
+    }
+
     /// Notifications showed: a glance for the last one (a burst ends on
     /// the newest): its app, title, body and logo, and a ring that beats.
     fn notified(&mut self) {
@@ -1233,6 +1320,9 @@ impl App {
             return;
         }
         if moment == island_core::notifications::Moment::FullScreen {
+            // An island hidden under it comes out for the glance.
+            self.full_glance = true;
+            self.show_surfaces();
             // A full-screen window may have gone over an island: on top
             // again (without taking the focus).
             for sf in &self.surfaces {
@@ -1273,7 +1363,8 @@ impl App {
             app_id: t.app_id,
             ..Default::default()
         };
-        self.pulse = Some(Instant::now());
+        // The logo's ring and the comet around the island, unless off.
+        self.pulse = motion().then(Instant::now);
         self.notify(n, TOAST_MS);
     }
 
@@ -1395,7 +1486,8 @@ impl App {
         if page == self.page {
             return;
         }
-        self.page_from = Some((self.page, Instant::now()));
+        // Animations off: the new page is just there (one frame draws it).
+        self.page_from = motion().then(|| (self.page, Instant::now()));
         self.page = page;
         for sf in self.surfaces.iter_mut().filter(|s| s.open) {
             if sf.last_frame.is_none() {
@@ -1721,15 +1813,18 @@ impl App {
             // is firm; shrinking (also from open to the glance) is firm, so
             // it never dips under where it stops. Each way on its own: a
             // glance can narrow while it grows taller.
-            let ph = match (sf.shrinking, sf.open) {
-                (true, _) => spring::CLOSE_HEIGHT,
-                (false, true) => spring::OPEN_HEIGHT,
-                (false, false) => spring::GLANCE,
+            // Animations off: one firm spring every way, no wobble at all.
+            let ph = match (motion(), sf.shrinking, sf.open) {
+                (false, _, _) => spring::STILL,
+                (_, true, _) => spring::CLOSE_HEIGHT,
+                (_, false, true) => spring::OPEN_HEIGHT,
+                (_, false, false) => spring::GLANCE,
             };
-            let pw = match (sf.narrowing, sf.open) {
-                (true, _) => spring::CLOSE_WIDTH,
-                (false, true) => spring::OPEN_WIDTH,
-                (false, false) => spring::GLANCE,
+            let pw = match (motion(), sf.narrowing, sf.open) {
+                (false, _, _) => spring::STILL,
+                (_, true, _) => spring::CLOSE_WIDTH,
+                (_, false, true) => spring::OPEN_WIDTH,
+                (_, false, false) => spring::GLANCE,
             };
             moving = sf.width.advance(&pw, ms) | sf.height.advance(&ph, ms);
             if let Some((_, at)) = &sf.swap {
@@ -1778,6 +1873,11 @@ impl App {
             // shrinking with it yet.
             if !peek && self.surfaces.iter().all(|s| s.last_frame.is_none()) {
                 self.notice = None;
+                // The glance over a full-screen app is gone: so is the island.
+                if self.full_glance {
+                    self.full_glance = false;
+                    self.show_surfaces();
+                }
             }
         }
     }
@@ -1793,6 +1893,8 @@ impl App {
         self.timer.set_lengths(&self.settings.focus, &s.focus);
         self.settings = s;
         let s = self.settings.clone();
+        set_motion(s.animations);
+        self.show_surfaces();
         self.texts = texts::texts(s.language, &self.locale);
         self.placement = s.placement;
         self.monitor = s.monitor.clone();
@@ -2075,7 +2177,11 @@ impl App {
                 self.reload();
             }
             // Windows' colors may have changed: the accent is read again.
-            WM_SETTINGCHANGE | WM_DWMCOLORIZATIONCOLORCHANGED => self.colors_changed(),
+            WM_SETTINGCHANGE => {
+                set_motion(self.settings.animations);
+                self.colors_changed();
+            }
+            WM_DWMCOLORIZATIONCOLORCHANGED => self.colors_changed(),
             WM_APP_TRAY => {
                 if matches!((lp.0 & 0xFFFF) as u32, WM_LBUTTONUP | WM_RBUTTONUP) {
                     self.open_menu(false);
@@ -2244,7 +2350,14 @@ impl App {
                 if wp.0 == SPI_SETWORKAREA.0 as usize {
                     ask_layout();
                 }
+                // "Animation effects" may have been switched.
+                set_motion(self.settings.animations);
                 self.colors_changed();
+            }
+            WM_APP_APPBAR if wp.0 == windows::Win32::UI::Shell::ABN_FULLSCREENAPP as usize => {
+                let sf = &self.surfaces[i];
+                let on = lp.0 != 0 && full_screen_on(sf.mon, &sf.monitor);
+                self.full_screen(i, on);
             }
             WM_DWMCOLORIZATIONCOLORCHANGED => self.colors_changed(),
             // Asked to close (the anchor, message-only, never is): the app
@@ -2267,6 +2380,9 @@ impl App {
                 if let (0, Some(t)) = (i, &self.tray) {
                     t.add(self.texts.name);
                 }
+                // A new Explorer knows no appbars: each island again.
+                appbar(hwnd, true);
+                self.full_screen(i, false);
             }
             _ => return None,
         }
@@ -2490,7 +2606,7 @@ impl App {
                 .iter()
                 .find(|s| s.hwnd == owner)
                 .and_then(|s| s.renderer.as_ref());
-            if let (true, Some(r), Some(m)) = (animations_on(), r, &self.menu) {
+            if let (true, Some(r), Some(m)) = (motion(), r, &self.menu) {
                 // It rises from below as Windows' own flyouts do.
                 if let Some(t) = &m.target {
                     let _ = r.menu_appear(t, 6.0 * k);
@@ -2627,7 +2743,7 @@ impl App {
         let now_on = self.menu_rows(startup).get(i).is_some_and(|r| r.1.on);
         if let Some(m) = &mut self.menu {
             m.startup = startup;
-            if now_on != row.on && animations_on() {
+            if now_on != row.on && motion() {
                 m.flip = Some((i, now_on, Instant::now()));
                 unsafe {
                     SetTimer(Some(m.hwnd), KNOB_TIMER, 15, None);
@@ -2878,6 +2994,10 @@ extern "system" fn menu_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
 
 /// An island window's messages.
 extern "system" fn island_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    // However it goes (the app busy or not), it leaves Explorer's appbars.
+    if msg == WM_DESTROY {
+        appbar(hwnd, false);
+    }
     let handled = APP.with(|cell| match cell.try_borrow_mut() {
         Ok(mut app) => app
             .as_mut()
@@ -3177,6 +3297,7 @@ fn main() -> Result<()> {
             bluetooth: None,
             notifications: None,
             pulse: None,
+            full_glance: false,
             // The banners are the user's: QA leaves them as they are.
             banners_quiet: !qa_mode() && banners::active(),
             banners_off: qa_mode().then_some(false),
