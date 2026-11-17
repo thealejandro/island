@@ -514,7 +514,9 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
             );
         }
         "toast" => {
-            app.pulse = Some(Instant::now());
+            app.pulse = motion().then(Instant::now);
+            let ms = app.toast_ms(&text(cmd, 3));
+            note(&format!("toast: {ms} ms"));
             app.notify(
                 Notice {
                     icon: island_core::notifications::ICON,
@@ -525,7 +527,7 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
                     body: text(cmd, 3),
                     ..Default::default()
                 },
-                TOAST_MS,
+                ms,
             );
         }
         "open" | "close" => {

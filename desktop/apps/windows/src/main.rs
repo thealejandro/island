@@ -281,9 +281,8 @@ fn open_app(app_id: &str) {
     }
 }
 
-/// How long a notification's glance stays: a touch longer than the others,
-/// it has more to read.
-const TOAST_MS: u32 = 5000;
+/// How long a notification stays once the pointer has left it, in ms.
+const TOAST_LEFT_MS: u32 = 1500;
 /// Reads the settings once an editor has finished saving them.
 const SETTINGS_TIMER: usize = 6;
 const SETTINGS_WAIT_MS: u32 = 150;
@@ -569,8 +568,8 @@ fn alphas(sf: &Surface, k: f32, peek_h: f32) -> [f32; 3] {
 /// needs for the song (see `layout::peek_width`).
 fn peek_unscaled(notice: &Option<Notice>, glance_on: bool, song_w: f32) -> (f32, f32) {
     let level = notice.as_ref().is_some_and(|n| n.level.is_some());
-    if notice.as_ref().is_some_and(|n| n.toast) {
-        island_core::notifications::SIZE
+    if let Some(n) = notice.as_ref().filter(|n| n.toast) {
+        island_core::notifications::size(!n.body.is_empty())
     } else if level && !glance_on {
         glance::LEVEL
     } else if level || notice.is_none() {
@@ -938,10 +937,10 @@ impl App {
         let open_a = openness(&self.surfaces[i], k, peek_h);
         let glance_on = self.glance();
         let scroll = self.lyric_scroll();
-        let ring = self
+        let since = self
             .pulse
             .map_or(f32::MAX, |t| t.elapsed().as_secs_f32() * 1000.0);
-        let ring = island_core::notifications::ring(ring);
+        let ring = island_core::notifications::ring(since);
         let orbit = self
             .pulse
             .and_then(|t| island_core::notifications::orbit(t.elapsed().as_secs_f32() * 1000.0));
@@ -1028,6 +1027,7 @@ impl App {
             when: &'a str,
             ring: f32,
             orbit: Option<(f32, f32)>,
+            since: f32,
         ) -> render::Notice<'a> {
             render::Notice {
                 icon: n.icon,
@@ -1041,9 +1041,10 @@ impl App {
                 when,
                 ring,
                 orbit,
+                since,
             }
         }
-        let view = |n| shown(n, when, ring, orbit);
+        let view = |n| shown(n, when, ring, orbit, since);
         let scene = render::Scene {
             page: self.page,
             tabs_clock: &clock,
@@ -1363,9 +1364,30 @@ impl App {
             app_id: t.app_id,
             ..Default::default()
         };
-        // The logo's ring and the comet around the island, unless off.
-        self.pulse = motion().then(Instant::now);
-        self.notify(n, TOAST_MS);
+        // The logo's ring and the comet around the island, unless off. One
+        // more of a burst from the same app with the same title doesn't
+        // start its arrival over.
+        let again = self.toast_shown()
+            && self
+                .notice
+                .as_ref()
+                .is_some_and(|o| o.title == n.title && o.detail == n.detail);
+        if !again {
+            self.pulse = motion().then(Instant::now);
+        }
+        let ms = self.toast_ms(&n.body);
+        self.notify(n, ms);
+    }
+
+    /// How long a notification's glance stays: longer with two lines of
+    /// body to read.
+    fn toast_ms(&self, body: &str) -> u32 {
+        let lines = self
+            .surfaces
+            .iter()
+            .find_map(|s| s.renderer.as_ref())
+            .map_or(1, |r| r.toast_body_lines(body));
+        island_core::notifications::stays_ms(lines)
     }
 
     /// Who uses `Device::ALL[i]` may have changed: a glance if an app
@@ -1799,6 +1821,7 @@ impl App {
     /// frames only while it moves, so a still island costs nothing.
     fn surface_frame(&mut self, i: usize) {
         let peeking = self.peeking();
+        let toast = self.toast_shown();
         let mut moving;
         {
             let sf = &mut self.surfaces[i];
@@ -1814,10 +1837,13 @@ impl App {
             // it never dips under where it stops. Each way on its own: a
             // glance can narrow while it grows taller.
             // Animations off: one firm spring every way, no wobble at all.
+            // A notification lands with a small bounce (the window has
+            // room for it below).
             let ph = match (motion(), sf.shrinking, sf.open) {
                 (false, _, _) => spring::STILL,
                 (_, true, _) => spring::CLOSE_HEIGHT,
                 (_, false, true) => spring::OPEN_HEIGHT,
+                (_, false, false) if toast => spring::TOAST,
                 (_, false, false) => spring::GLANCE,
             };
             let pw = match (motion(), sf.narrowing, sf.open) {
@@ -2160,10 +2186,20 @@ impl App {
                 // Otherwise it stays while the islands shrink back (so it
                 // keeps its size and its look on the way) and goes once
                 // still.
+                let toast = self.toast_shown();
                 if self.glance() {
                     self.notice = None;
                 }
                 self.set_peek(false);
+                // The pointer waited on a notification for the player: it
+                // opens now.
+                if toast {
+                    for i in 0..self.surfaces.len() {
+                        if self.surfaces[i].tracking {
+                            self.set_open(i, true);
+                        }
+                    }
+                }
             }
             WM_TIMER if wp.0 == FOCUS_TIMER => self.focus_ended(),
             WM_TIMER if wp.0 == BLUETOOTH_TIMER => self.bluetooth_changed(),
@@ -2289,6 +2325,12 @@ impl App {
                         unsafe { SetTimer(Some(hwnd), HOVER_TIMER, HOVER_DELAY_MS, None) };
                     }
                 }
+                // A notification stays while the pointer is on it.
+                if !self.surfaces[i].open && self.toast_shown() {
+                    unsafe {
+                        let _ = KillTimer(Some(self.anchor), PEEK_TIMER);
+                    }
+                }
                 let (x, y) = (lp.0 as i16 as f32, (lp.0 >> 16) as i16 as f32);
                 let hot = self.hot_at(i, x, y);
                 // Held down and moved off: no longer pressed.
@@ -2300,6 +2342,10 @@ impl App {
                 self.surfaces[i].tracking = false;
                 unsafe {
                     let _ = KillTimer(Some(hwnd), HOVER_TIMER);
+                    // Off a notification: it goes a moment later.
+                    if self.toast_shown() {
+                        SetTimer(Some(self.anchor), PEEK_TIMER, TOAST_LEFT_MS, None);
+                    }
                 }
                 self.set_open(i, false);
             }
@@ -2308,10 +2354,9 @@ impl App {
                     let _ = KillTimer(Some(hwnd), HOVER_TIMER);
                 }
                 // Over a notification the pointer is there to click it: the
-                // player waits until it is gone.
-                if self.surfaces[i].tracking && self.toast_shown() {
-                    unsafe { SetTimer(Some(hwnd), HOVER_TIMER, HOVER_DELAY_MS, None) };
-                } else if self.surfaces[i].tracking {
+                // player waits until it is gone (it opens then, see
+                // PEEK_TIMER), with no timer running meanwhile.
+                if self.surfaces[i].tracking && !self.toast_shown() {
                     self.set_open(i, true);
                 }
             }

@@ -188,6 +188,9 @@ pub struct Notice<'a> {
     /// The light running around the edge as it arrives: how far around
     /// (0 to 1) and how bright (see `island_core::notifications::orbit`).
     pub orbit: Option<(f32, f32)>,
+    /// Ms since it arrived, for its entrance; `f32::MAX` with none to show
+    /// (animations off): all in place.
+    pub since: f32,
 }
 
 /// The focus page, ready to draw.
@@ -241,8 +244,8 @@ const CLOSED_W: f32 = 180.0;
 /// The note that stands in for a missing cover is laid out in a box this
 /// big (DIPs) and scaled to the cover's size.
 const NOTE_BOX: f32 = 44.0;
-/// A notification's logo, in DIPs (see `island_core::notifications`).
-const TOAST_LOGO: f32 = 48.0;
+/// A notification's logo, in DIPs.
+const TOAST_LOGO: f32 = island_core::notifications::LOGO;
 /// A blue like the system's own, if Windows doesn't tell its accent.
 const DEFAULT_ACCENT: [f32; 3] = [0.3, 0.6, 1.0];
 
@@ -382,6 +385,8 @@ struct Text {
     toast_title: IDWriteTextFormat,
     /// A notification's app, beside its `when` (`next`'s size).
     toast_app: IDWriteTextFormat,
+    /// A notification's body: up to two lines, the second cut short.
+    toast_body: IDWriteTextFormat,
 }
 
 /// A menu's rows, name and version.
@@ -529,7 +534,7 @@ fn hover(pressed: bool) -> f32 {
 
 /// The cover's corners in the open island; the notification's logo.
 const ART_RADIUS: f32 = 12.0;
-const TOAST_RADIUS: f32 = 12.0;
+const TOAST_RADIUS: f32 = island_core::notifications::LOGO_RADIUS;
 
 fn white(a: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
@@ -619,6 +624,9 @@ impl Text {
             let lines = format(b, 16.0, DWRITE_TEXT_ALIGNMENT_LEADING)?;
             lines.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
             lines.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+            let toast_body = format(n, 13.0, DWRITE_TEXT_ALIGNMENT_LEADING)?;
+            toast_body.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
+            toast_body.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
             let numbers = dw.CreateTypography()?;
             numbers.AddFontFeature(DWRITE_FONT_FEATURE {
                 nameTag: DWRITE_FONT_FEATURE_TAG_TABULAR_FIGURES,
@@ -648,8 +656,9 @@ impl Text {
                 clock: format(b, 12.0, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
                 big: format(b, 42.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
                 next: format(n, 12.0, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
-                toast_title: format(b, 15.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+                toast_title: format(b, 16.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
                 toast_app: format(n, 12.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+                toast_body,
                 dw: dw.clone(),
             })
         }
@@ -1737,14 +1746,35 @@ impl Renderer {
     /// at its full size, centered: the body uncovers it as it grows.
     fn peek_toast(&mut self, n: &Notice, size: (f32, f32), dy: f32, alpha: f32, scale: f32) {
         use island_core::notifications as toast;
-        let dx = (size.0 - toast::SIZE.0) / 2.0;
-        let l = toast::layout(toast::SIZE, !n.body.is_empty());
+        let has_body = !n.body.is_empty();
+        let full = toast::size(has_body);
+        let dx = (size.0 - full.0) / 2.0;
+        let l = toast::layout(full, has_body);
         let at = |r: Rect| lift(shift(r, dx), dy);
-        let r = at(l.logo);
+        // As it arrives the logo grows into place, and the lines rise one
+        // after the other.
+        let (grow, logo_a) = toast::logo_in(n.since);
+        let line = |r: Rect, i: usize| {
+            let (rise, a) = toast::line_in(n.since, i);
+            (lift(at(r), rise), a * alpha)
+        };
+        let r = {
+            let r = at(l.logo);
+            let side = r.width * grow;
+            Rect {
+                x: r.x + (r.width - side) / 2.0,
+                y: r.y + (r.height - side) / 2.0,
+                width: side,
+                height: side,
+            }
+        };
+        // (The lines keep `alpha`, the glance's own, in `line`.)
+        let alpha = alpha * logo_a;
+        let radius = TOAST_RADIUS * grow;
         let rounded = D2D1_ROUNDED_RECT {
             rect: rf(r),
-            radiusX: TOAST_RADIUS,
-            radiusY: TOAST_RADIUS,
+            radiusX: radius,
+            radiusY: radius,
         };
         let side = (TOAST_LOGO * scale).ceil();
         let dc = self.dc.clone();
@@ -1759,26 +1789,44 @@ impl Renderer {
             // No logo: the bell, on a square in the ring's color.
             None => {
                 let accent = self.toast_accent(n, scale);
-                self.tinted_rounded(r, TOAST_RADIUS, accent, 0.28 * alpha);
-                self.icon(n.icon, r, 24.0, WHITE, alpha);
+                self.tinted_rounded(r, radius, accent, 0.28 * alpha);
+                self.icon(n.icon, r, 24.0 * grow, WHITE, alpha);
             }
         }
-        self.tinted(
-            n.title,
-            &self.text.toast_app,
-            at(l.app),
-            WHITE,
-            INK_2 * alpha,
-        );
-        self.tinted(n.when, &self.text.next, at(l.when), WHITE, INK_3 * alpha);
+        let (app, a) = line(l.app, 0);
+        self.tinted(n.title, &self.text.toast_app, app, WHITE, INK_2 * a);
+        let (when, a) = line(l.when, 0);
+        self.tinted(n.when, &self.text.next, when, WHITE, INK_3 * a);
         let title = if n.detail.is_empty() {
             n.title
         } else {
             n.detail
         };
-        self.text(title, &self.text.toast_title, at(l.title), INK * alpha);
-        if !n.body.is_empty() {
-            self.tinted(n.body, &self.text.artist, at(l.body), WHITE, INK_2 * alpha);
+        let (at_title, a) = line(l.title, 1);
+        self.text(title, &self.text.toast_title, at_title, INK * a);
+        if has_body {
+            let (body, a) = line(l.body, 2);
+            self.tinted(n.body, &self.text.toast_body, body, WHITE, INK_2 * a);
+        }
+    }
+
+    /// How many lines a notification's body takes (up to two), to keep it
+    /// longer when it is two.
+    pub fn toast_body_lines(&self, body: &str) -> u32 {
+        use island_core::notifications as toast;
+        if body.is_empty() {
+            return 0;
+        }
+        let b = toast::layout(toast::size(true), true).body;
+        unsafe {
+            self.text
+                .dw
+                .CreateTextLayout(&utf16(body), &self.text.toast_body, b.width, b.height)
+                .and_then(|l| {
+                    let mut m = DWRITE_TEXT_METRICS::default();
+                    l.GetMetrics(&mut m).map(|_| m)
+                })
+                .map_or(1, |m| m.lineCount.clamp(1, 2))
         }
     }
 
@@ -2185,7 +2233,8 @@ impl Renderer {
                     }
                 }
                 if let Some((color, ring, a, orbit)) = toast {
-                    self.glow(&geo, s.body.height, color, a)?;
+                    // (A notification's a little brighter than a cover's.)
+                    self.glow(&geo, s.body.height, color, a * 1.25)?;
                     self.ring(&geo, color, ring * a, s.scale * s.island_scale);
                     if let Some((at, bright)) = orbit {
                         self.comet(&geo, color, at, bright * a, s.scale * s.island_scale);

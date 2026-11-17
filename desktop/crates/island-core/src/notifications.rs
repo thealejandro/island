@@ -54,18 +54,51 @@ pub fn glances(moment: Moment, quiet: bool, in_full_screen: bool) -> bool {
 }
 
 /// A notification's glance: bigger than the song's, so it never passes for
-/// it, with room for the app's logo and two lines (DIPs).
-pub const SIZE: (f32, f32) = (460.0, 84.0);
+/// it, with room for the app's logo, its name, the title and two lines of
+/// body; without a body, shorter (DIPs).
+pub fn size(has_body: bool) -> (f32, f32) {
+    (480.0, if has_body { 100.0 } else { 80.0 })
+}
+
+/// How long a notification's glance stays, in ms: longer when its body
+/// takes two lines, to read them.
+pub fn stays_ms(body_lines: u32) -> u32 {
+    if body_lines >= 2 { 6500 } else { 5000 }
+}
 
 /// How long the arrival is animated, in ms: as long as the light's lap.
 pub const PULSE_MS: f32 = ORBIT_DELAY + ORBIT_MS;
 /// The ring flashes once as one arrives, this long.
 const FLASH_MS: f32 = 600.0;
 
+/// Eased in (fast, then slowing) over `ms` from `start`, for `length`: 0
+/// before, 1 after.
+fn ease_in(ms: f32, start: f32, length: f32) -> f32 {
+    let t = ((ms - start) / length).clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
+/// The logo as it arrives, `ms` after: its scale (0.8 to 1) and opacity.
+pub fn logo_in(ms: f32) -> (f32, f32) {
+    let e = ease_in(ms, 80.0, 220.0);
+    (0.8 + 0.2 * e, e)
+}
+
+/// How far the rise of a line is (DIPs).
+const RISE: f32 = 6.0;
+
+/// Line `i` (the app, the title, the body) as it arrives, `ms` after: how
+/// far below its place it still is, and its opacity. Each starts 40 ms
+/// after the one above.
+pub fn line_in(ms: f32, i: usize) -> (f32, f32) {
+    let e = ease_in(ms, 60.0 + 40.0 * i as f32, 180.0);
+    (RISE * (1.0 - e), e)
+}
+
 /// How bright the ring in the app's color is, `ms` after it arrived: one
 /// flash that fades, then a steady glow while the glance stays.
 pub fn ring(ms: f32) -> f32 {
-    const REST: f32 = 0.3;
+    const REST: f32 = 0.35;
     if !(0.0..FLASH_MS).contains(&ms) {
         return REST;
     }
@@ -74,7 +107,7 @@ pub fn ring(ms: f32) -> f32 {
 }
 
 /// How long the light runs around the island's edge as one arrives (ms).
-pub const ORBIT_MS: f32 = 1500.0;
+pub const ORBIT_MS: f32 = 1100.0;
 /// It waits this long first, for the island to grow into the glance.
 pub const ORBIT_DELAY: f32 = 250.0;
 
@@ -104,19 +137,23 @@ pub struct ToastLayout {
     pub body: Rect,
 }
 
+/// The logo's side and its corners' radius (DIPs).
+pub const LOGO: f32 = 52.0;
+pub const LOGO_RADIUS: f32 = 13.0;
+
 pub fn layout((w, h): (f32, f32), has_body: bool) -> ToastLayout {
-    let (pad, side) = (18.0, 48.0);
+    let (pad, side) = (20.0, LOGO);
     let logo = Rect {
         x: pad,
         y: (h - side) / 2.0,
         width: side,
         height: side,
     };
-    let x = pad + side + 12.0;
-    let right = w - 18.0;
-    // The lines, centered as a block.
-    let (app_h, title_h) = (17.0, 22.0);
-    let body_h = if has_body { 18.0 } else { 0.0 };
+    let x = pad + side + 14.0;
+    let right = w - pad;
+    // The lines, centered as a block; the body has room for two.
+    let (app_h, title_h) = (17.0, 24.0);
+    let body_h = if has_body { 36.0 } else { 0.0 };
     let top = (h - app_h - title_h - body_h) / 2.0;
     let when = Rect {
         x: right - 64.0,
@@ -279,10 +316,10 @@ mod tests {
     #[test]
     fn the_glance_fits_logo_and_lines() {
         for has_body in [true, false] {
-            let l = layout(SIZE, has_body);
-            let inside = |r: Rect| {
-                r.x >= 0.0 && r.y >= 0.0 && r.x + r.width <= SIZE.0 && r.y + r.height <= SIZE.1
-            };
+            let s = size(has_body);
+            let l = layout(s, has_body);
+            let inside =
+                |r: Rect| r.x >= 0.0 && r.y >= 0.0 && r.x + r.width <= s.0 && r.y + r.height <= s.1;
             for r in [l.logo, l.app, l.when, l.title, l.body] {
                 assert!(inside(r), "{r:?}");
             }
@@ -291,9 +328,37 @@ mod tests {
             assert!(l.app.y + l.app.height <= l.title.y);
             assert!(l.title.y + l.title.height <= l.body.y);
         }
-        assert_eq!(layout(SIZE, false).body.height, 0.0);
+        assert_eq!(layout(size(false), false).body.height, 0.0);
+        // Two lines of 13 px fit the body's box.
+        assert!(layout(size(true), true).body.height >= 2.0 * 13.0 * 1.33);
         // Taller than the song's glance, so it never passes for it.
-        const { assert!(SIZE.1 > crate::media::PEEK.1 + 20.0) };
+        assert!(size(false).1 > crate::media::PEEK.1 + 20.0);
+        // Not a gap left under the lines without a body.
+        let l = layout(size(false), false);
+        assert!(l.app.y > 15.0 && size(false).1 - (l.title.y + l.title.height) > 15.0);
+    }
+
+    #[test]
+    fn it_arrives_in_steps_and_is_done_with_the_light() {
+        assert_eq!(logo_in(0.0), (0.8, 0.0));
+        assert_eq!(logo_in(PULSE_MS), (1.0, 1.0));
+        assert_eq!(line_in(0.0, 0), (RISE, 0.0));
+        // Each line a little after the one above.
+        assert!(line_in(120.0, 0).1 > line_in(120.0, 1).1);
+        assert!(line_in(120.0, 1).1 > line_in(120.0, 2).1);
+        for i in 0..3 {
+            assert_eq!(line_in(PULSE_MS, i), (0.0, 1.0));
+            // Never past its place, nor more than opaque.
+            for ms in 0..400 {
+                let (dy, a) = line_in(ms as f32, i);
+                assert!((0.0..=RISE).contains(&dy) && (0.0..=1.0).contains(&a));
+            }
+        }
+        // Without an arrival (animations off), all is in place.
+        assert_eq!(line_in(f32::MAX, 2), (0.0, 1.0));
+        assert_eq!(logo_in(f32::MAX), (1.0, 1.0));
+        assert_eq!(PULSE_MS, 1350.0);
+        assert_eq!((stays_ms(0), stays_ms(1), stays_ms(2)), (5000, 5000, 6500));
     }
 
     #[test]
