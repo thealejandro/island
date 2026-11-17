@@ -158,8 +158,9 @@ pub const ART: Rect = rect(24.0, 24.0, 88.0, 88.0);
 const TEXT_X: f32 = 128.0;
 const MARGIN: f32 = 24.0;
 const BUTTON: f32 = 40.0;
-const BAR_Y: f32 = 124.0;
-const BUTTONS_Y: f32 = 132.0;
+/// The bar's and the buttons' rows, which the focus page shares.
+pub(crate) const BAR_Y: f32 = 124.0;
+pub(crate) const BUTTONS_Y: f32 = 132.0;
 const BUTTONS_GAP: f32 = 64.0;
 
 // With synced lyrics the open island is not taller: the lines run in a

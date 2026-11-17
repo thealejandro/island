@@ -62,7 +62,7 @@ impl Look {
                 knob_inset: 2.5,
                 switch_end: 12.0,
                 font: 14.0,
-                head_font: 14.5,
+                head_font: 14.0,
                 version_font: 12.0,
             },
             Self::Large => Size {
