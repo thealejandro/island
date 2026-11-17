@@ -78,12 +78,7 @@ impl MonitorChoice {
 /// Empty only with no screens. `ids` are the screens' device ids, in the
 /// same order as `monitors` (a missing one matches no [`Pick::Id`]).
 pub fn pick_all(monitors: &[Monitor], ids: &[&str], choice: &MonitorChoice) -> Vec<usize> {
-    // The screens as they sit: left to right, then top to bottom.
-    let mut order: Vec<usize> = (0..monitors.len()).collect();
-    order.sort_by(|&a, &b| {
-        let (ra, rb) = (monitors[a].rect, monitors[b].rect);
-        ra.x.total_cmp(&rb.x).then(ra.y.total_cmp(&rb.y))
-    });
+    let order = order(monitors);
     let numbered = |n: usize| n.checked_sub(1).and_then(|i| order.get(i).copied());
     let chosen: Vec<usize> = match choice {
         MonitorChoice::Primary => Vec::new(),
@@ -109,6 +104,67 @@ pub fn pick_all(monitors: &[Monitor], ids: &[&str], choice: &MonitorChoice) -> V
         .or(if monitors.is_empty() { None } else { Some(0) })
         .into_iter()
         .collect()
+}
+
+/// Indices into `monitors` as the screens sit: left to right, then top to
+/// bottom. Their numbers count in this order.
+pub fn order(monitors: &[Monitor]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..monitors.len()).collect();
+    order.sort_by(|&a, &b| {
+        let (ra, rb) = (monitors[a].rect, monitors[b].rect);
+        ra.x.total_cmp(&rb.x).then(ra.y.total_cmp(&rb.y))
+    });
+    order
+}
+
+fn connected(ids: &[&str], id: &str) -> bool {
+    ids.iter().any(|m| m.eq_ignore_ascii_case(id))
+}
+
+/// The choice after turning the island on screen `i` (an index into
+/// `monitors`) on or off: the screens that have one now, by id (by number
+/// where Windows gives none), and the chosen ones not plugged in now, kept
+/// for when they come back. The last island is never turned off; the
+/// primary alone is [`MonitorChoice::Primary`].
+pub fn toggle(
+    monitors: &[Monitor],
+    ids: &[&str],
+    current: &MonitorChoice,
+    i: usize,
+) -> MonitorChoice {
+    let order = order(monitors);
+    let mut on = pick_all(monitors, ids, current);
+    match on.iter().position(|&j| j == i) {
+        Some(_) if on.len() == 1 => return current.clone(),
+        Some(p) => {
+            on.remove(p);
+        }
+        None if i < monitors.len() => on.push(i),
+        None => return current.clone(),
+    }
+    let away: Vec<Pick> = match current {
+        MonitorChoice::List(ps) => ps
+            .iter()
+            .filter(|p| matches!(p, Pick::Id(id) if !connected(ids, id)))
+            .cloned()
+            .collect(),
+        _ => Vec::new(),
+    };
+    let primary = monitors.iter().position(|m| m.primary);
+    if away.is_empty() && on.len() == 1 && Some(on[0]) == primary {
+        return MonitorChoice::Primary;
+    }
+    let mut picks: Vec<Pick> = order
+        .iter()
+        .enumerate()
+        .filter(|(_, j)| on.contains(j))
+        .map(|(n, &j)| match ids.get(j) {
+            Some(id) if !id.is_empty() => Pick::Id((*id).to_owned()),
+            _ => Pick::Number(n + 1),
+        })
+        .collect();
+    picks.extend(away);
+    MonitorChoice::List(picks)
 }
 
 #[cfg(test)]
@@ -244,6 +300,62 @@ mod tests {
         for bad in ["0", "-1", "dos", "", "1,", ",2", "1,0", "1,dos"] {
             assert_eq!(MonitorChoice::parse(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn toggling_adds_and_removes_screens_by_id() {
+        let ids = ["A", "B", "C"];
+        let id = |s: &str| Pick::Id(s.into());
+        let m = three();
+        // From the primary (A, in the middle), the left screen (B) too.
+        let both = toggle(&m, &ids, &MonitorChoice::Primary, 1);
+        assert_eq!(both, MonitorChoice::List(vec![id("B"), id("A")]));
+        assert_eq!(pick_all(&m, &ids, &both), vec![1, 0]);
+        // B off again: the primary alone.
+        assert_eq!(toggle(&m, &ids, &both, 1), MonitorChoice::Primary);
+        // The primary off: B alone, by id.
+        assert_eq!(
+            toggle(&m, &ids, &both, 0),
+            MonitorChoice::List(vec![id("B")])
+        );
+        // The last one stays on.
+        let b = MonitorChoice::List(vec![id("B")]);
+        assert_eq!(toggle(&m, &ids, &b, 1), b);
+        assert_eq!(
+            toggle(&m, &ids, &MonitorChoice::Primary, 0),
+            MonitorChoice::Primary
+        );
+        // Numbers and "all" become ids.
+        assert_eq!(
+            toggle(&m, &ids, &MonitorChoice::All, 2),
+            MonitorChoice::List(vec![id("B"), id("A")])
+        );
+        assert_eq!(
+            toggle(&m, &ids, &MonitorChoice::Number(1), 2),
+            MonitorChoice::List(vec![id("B"), id("C")])
+        );
+        // Out of range: as it was.
+        assert_eq!(toggle(&m, &ids, &b, 7), b);
+    }
+
+    #[test]
+    fn toggling_keeps_unplugged_screens_and_numbers_without_ids() {
+        let id = |s: &str| Pick::Id(s.into());
+        // C chosen but unplugged: the primary shows; adding B keeps C.
+        let away = MonitorChoice::List(vec![id("A"), id("C")]);
+        let got = toggle(&two(), &["A", "B"], &away, 1);
+        assert_eq!(got, MonitorChoice::List(vec![id("B"), id("A"), id("C")]));
+        // B off again: the primary, but not "primary": C is still wanted.
+        assert_eq!(
+            toggle(&two(), &["A", "B"], &got, 1),
+            MonitorChoice::List(vec![id("A"), id("C")])
+        );
+        // No ids from Windows: numbers, left to right.
+        assert_eq!(
+            toggle(&two(), &[], &MonitorChoice::Primary, 1),
+            MonitorChoice::List(vec![Pick::Number(1), Pick::Number(2)])
+        );
+        assert_eq!(order(&three()), vec![1, 0, 2]);
     }
 
     #[test]

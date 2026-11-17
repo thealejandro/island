@@ -343,6 +343,22 @@ impl Settings {
     }
 }
 
+/// The `monitor` setting as the file holds it; read back, the same choice.
+pub fn monitor_value(choice: &MonitorChoice) -> Value {
+    match choice {
+        MonitorChoice::Primary => Value::from("primary"),
+        MonitorChoice::All => Value::from("all"),
+        MonitorChoice::Number(n) => Value::from(*n),
+        MonitorChoice::List(ps) => ps
+            .iter()
+            .map(|p| match p {
+                Pick::Number(n) => Value::from(*n),
+                Pick::Id(id) => Value::from(id.as_str()),
+            })
+            .collect(),
+    }
+}
+
 /// `text` with one key set to `value`, everything else kept as it was. Text
 /// that isn't a JSON object starts over as one.
 pub fn set(text: &str, key: &str, value: Value) -> String {
@@ -505,6 +521,22 @@ mod tests {
         // Too big to be a settings file.
         let huge = format!("{{\"lyrics\": true, \"x\": \"{}\"}}", "a".repeat(MAX_FILE));
         assert_eq!(Settings::parse(&huge), None);
+    }
+
+    #[test]
+    fn the_monitor_written_reads_back_the_same() {
+        for c in [
+            MonitorChoice::Primary,
+            MonitorChoice::All,
+            MonitorChoice::Number(2),
+            MonitorChoice::List(vec![
+                Pick::Id("\\\\?\\DISPLAY#DEL41B8#5&1".into()),
+                Pick::Number(3),
+            ]),
+        ] {
+            let text = set("{}", "monitor", monitor_value(&c));
+            assert_eq!(parse(&text).monitor, c);
+        }
     }
 
     #[test]

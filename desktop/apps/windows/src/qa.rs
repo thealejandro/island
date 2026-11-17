@@ -594,6 +594,52 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
             let max = arg_f(cmd, 2).unwrap_or(60.0) as u32;
             QA.with_borrow_mut(|q| q.as_mut().map(|q| q.film = Some((name, 0, max))));
         }
+        // A made-up screen beside the real ones (x y width height, in px):
+        // only the island's list of screens has it.
+        "fake-monitor" => {
+            let (x, y) = (
+                arg_f(cmd, 1).unwrap_or(2560.0),
+                arg_f(cmd, 2).unwrap_or(0.0),
+            );
+            let (w, h) = (
+                arg_f(cmd, 3).unwrap_or(1920.0),
+                arg_f(cmd, 4).unwrap_or(1080.0),
+            );
+            let rect = Rect {
+                x,
+                y,
+                width: w,
+                height: h,
+            };
+            FAKE.with_borrow_mut(|f| {
+                let id = format!("QA#{}", f.len() + 1);
+                f.push((
+                    Monitor {
+                        rect,
+                        work: rect,
+                        primary: false,
+                    },
+                    id,
+                ));
+            });
+            app.layout();
+        }
+        // The menu's switch for screen `j` (its index in the list): only
+        // those, so a script never flips a setting the file keeps.
+        "menu-screen" => {
+            let j = arg_f(cmd, 1)? as u32;
+            let Some(startup) = app.menu.as_ref().map(|m| m.startup) else {
+                return Err("«menu-screen»: el menú no está abierto".into());
+            };
+            let Some(i) = app
+                .menu_rows(startup)
+                .iter()
+                .position(|r| r.0 == MENU_SCREEN + j)
+            else {
+                return Err(format!("«menu-screen»: no hay pantalla {j}"));
+            };
+            let _ = app.menu_choose(i);
+        }
         // As if the screens changed: each island told twice, as Windows does
         // with WM_DISPLAYCHANGE and WM_DPICHANGED.
         "display-change" => {
@@ -650,11 +696,30 @@ thread_local! {
     /// How many layouts ran: the screens changing asks for one, not one
     /// per island and message.
     static LAYOUTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// Screens made up by `fake-monitor`.
+    static FAKE: RefCell<Vec<(Monitor, String)>> = const { RefCell::new(Vec::new()) };
 }
 
-/// A layout ran.
+/// The made-up screens, for the list of connected ones.
+pub fn fake_monitors() -> Vec<(HMONITOR, Monitor, String)> {
+    FAKE.with_borrow(|f| {
+        f.iter()
+            .map(|(m, id)| (HMONITOR::default(), *m, id.clone()))
+            .collect()
+    })
+}
+
+/// A layout ran: the islands may be others now, or elsewhere, so where
+/// their centers were no longer counts.
 pub fn layout_ran() {
     LAYOUTS.set(LAYOUTS.get() + 1);
+    QA.with(|q| {
+        if let Ok(mut q) = q.try_borrow_mut()
+            && let Some(q) = q.as_mut()
+        {
+            q.centers.clear();
+        }
+    });
 }
 
 /// A note for the report, once.
