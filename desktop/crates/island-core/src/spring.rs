@@ -48,6 +48,15 @@ pub const GLANCE: Params = Params {
     epsilon: 0.25,
 };
 
+/// A notification's glance growing taller: a small bounce as it lands
+/// (about 8 %, some 5 DIPs).
+pub const TOAST: Params = Params {
+    spring: 6.4,
+    damping: 0.40,
+    mass: 1.0,
+    epsilon: 0.25,
+};
+
 /// Animations off: critically damped (ζ = 1 is a damping of
 /// 2·√(spring·mass·0.016), stepped as below; 0.70 here), so it goes
 /// straight there without an overshoot either way.
@@ -220,6 +229,26 @@ mod tests {
                 low = low.min(s.value);
             }
             assert!(low >= to - 0.01, "{from} to {to}: low {low}");
+        }
+    }
+
+    #[test]
+    fn a_toast_lands_with_a_small_bounce() {
+        // Closed to the toast's height, at islandScale 1 and 1.4.
+        for (from, to) in [(32.0, 100.0), (32.0 * 1.4, 140.0)] {
+            let mut s = Spring::at(from);
+            s.target = to;
+            let mut peak = s.value;
+            let mut frames = 0;
+            while s.advance(&TOAST, 16.7) {
+                peak = peak.max(s.value);
+                frames += 1;
+            }
+            assert!(
+                peak > to + 2.0 && peak < to + ROOM_HEIGHT,
+                "{to}: peak {peak}"
+            );
+            assert!(frames <= 60, "{to}: {frames} frames");
         }
     }
 
