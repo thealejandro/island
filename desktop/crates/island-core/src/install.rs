@@ -198,6 +198,7 @@ mod tests {
         assert!(newer("0.1.1", "junk"));
     }
 
+    #[cfg(windows)]
     fn l() -> Layout {
         layout(
             Path::new(r"C:\Users\Test\AppData\Local"),
@@ -206,6 +207,8 @@ mod tests {
     }
 
     #[test]
+    // `Path` only splits at `\` on Windows, where the island installs.
+    #[cfg(windows)]
     fn the_layout_lands_in_the_users_folders() {
         let l = l();
         assert_eq!(
@@ -238,6 +241,8 @@ mod tests {
     }
 
     #[test]
+    // `Path` only splits at `\` on Windows, where the island installs.
+    #[cfg(windows)]
     fn the_uninstall_entry_describes_the_install() {
         let exe = Path::new(r"C:\Users\Test\AppData\Local\Programs\Island\island.exe");
         let values = uninstall_values(exe, "1.2.3", 3 * 1024);
