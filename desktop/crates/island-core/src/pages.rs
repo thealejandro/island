@@ -52,7 +52,7 @@ pub fn tab(i: usize) -> Rect {
 }
 
 pub fn clock(width: f32) -> Rect {
-    rect(width - TABS_X - CLOCK_WIDTH, TABS_Y, CLOCK_WIDTH, TAB.1)
+    rect(width - MARGIN - CLOCK_WIDTH, TABS_Y, CLOCK_WIDTH, TAB.1)
 }
 
 /// The tab under (x, y), if any.
@@ -73,13 +73,18 @@ pub struct FocusPage {
     /// What comes next, beside the time.
     pub next: Rect,
     pub bar: Rect,
-    /// One dot per round before a long break.
+    /// One dot per round before a long break, at the right of the label's
+    /// row (drawn from its right end).
     pub dots: Rect,
 }
 
 const MARGIN: f32 = 24.0;
 pub const FOCUS_BUTTON: f32 = 40.0;
-const FOCUS_BUTTONS_Y: f32 = 128.0;
+/// Level with the player's buttons and bar, so nothing moves between pages.
+const FOCUS_BUTTONS_Y: f32 = crate::media::BUTTONS_Y;
+const FOCUS_BAR_Y: f32 = crate::media::BAR_Y;
+/// Room at the label row's right for the dots.
+const DOTS_ROOM: f32 = 100.0;
 const FOCUS_BUTTONS_GAP: f32 = 64.0;
 pub const DOT: f32 = 6.0;
 pub const DOT_GAP: f32 = 6.0;
@@ -87,11 +92,16 @@ pub const DOT_GAP: f32 = 6.0;
 pub fn focus_page(width: f32) -> FocusPage {
     let inner = width - 2.0 * MARGIN;
     FocusPage {
-        label: rect(MARGIN, 18.0, inner, 20.0),
-        time: rect(MARGIN, 38.0, 200.0, 54.0),
-        next: rect(MARGIN + 200.0, 58.0, inner - 200.0, 22.0),
-        bar: rect(MARGIN, 100.0, inner, 4.0),
-        dots: rect(MARGIN, 112.0, inner, DOT),
+        label: rect(MARGIN, 18.0, inner - DOTS_ROOM, 20.0),
+        time: rect(MARGIN, 44.0, 200.0, 54.0),
+        next: rect(MARGIN + 200.0, 64.0, inner - 200.0, 22.0),
+        bar: rect(MARGIN, FOCUS_BAR_Y, inner, 4.0),
+        dots: rect(
+            MARGIN + inner - DOTS_ROOM,
+            18.0 + (20.0 - DOT) / 2.0,
+            DOTS_ROOM,
+            DOT,
+        ),
     }
 }
 
@@ -167,11 +177,19 @@ mod tests {
             let p = focus_page(w);
             assert!(p.next.width > 80.0, "{w}");
             assert!(p.bar.y > p.time.y + p.time.height);
-            assert!(p.dots.y > p.bar.y);
+            // The dots beside the label, clear of it; the bar under the time.
+            assert!(p.dots.x >= p.label.x + p.label.width);
+            assert!(p.dots.y > p.label.y && p.dots.y + DOT < p.label.y + p.label.height);
+            assert_eq!(
+                p.bar.y,
+                crate::media::player(crate::media::Open::new(w, false))
+                    .bar
+                    .y
+            );
             let next = focus_button(FocusButton::Skip, w);
             assert!(next.x + next.width < w - MARGIN);
             assert!(next.y + next.height <= PAGE_HEIGHT);
-            assert!(p.dots.y + p.dots.height < focus_button(FocusButton::Reset, w).y);
+            assert!(p.bar.y + p.bar.height < focus_button(FocusButton::Reset, w).y);
             w += 10.0;
         }
     }

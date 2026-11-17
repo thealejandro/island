@@ -45,14 +45,14 @@ use windows::Win32::Graphics::DirectComposition::{
     IDCompositionVisual,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-    DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-    DWRITE_PARAGRAPH_ALIGNMENT_NEAR, DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS,
-    DWRITE_TEXT_RANGE, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_FEATURE, DWRITE_FONT_FEATURE_TAG_TABULAR_FIGURES,
+    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
+    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_MEASURING_MODE_NATURAL,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_NEAR, DWRITE_TEXT_ALIGNMENT,
+    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING,
+    DWRITE_TEXT_METRICS, DWRITE_TEXT_RANGE, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
     DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP, DWriteCreateFactory, IDWriteFactory,
-    IDWriteTextFormat, IDWriteTextLayout,
+    IDWriteTextFormat, IDWriteTextLayout, IDWriteTypography,
 };
 use windows::Win32::Graphics::Dwm::DwmGetColorizationColor;
 use windows::Win32::Graphics::Dxgi::Common::{
@@ -65,7 +65,7 @@ use windows::Win32::Graphics::Imaging::{
     WICBitmapInterpolationModeFant, WICBitmapPaletteTypeMedianCut, WICDecodeMetadataCacheOnDemand,
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
-use windows::core::{BOOL, Error, Interface, PCWSTR, Result, w};
+use windows::core::{BOOL, Error, Interface, Result, w};
 use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::bars::Bars;
@@ -346,6 +346,8 @@ struct Text {
     /// The lyrics' lines: they wrap, and all have one size, so a line
     /// keeps its height as it comes into focus.
     lines: IDWriteTextFormat,
+    /// Tabular figures, for what counts (see `Renderer::numbers`).
+    numbers: IDWriteTypography,
     title: IDWriteTextFormat,
     artist: IDWriteTextFormat,
     time: IDWriteTextFormat,
@@ -478,6 +480,19 @@ const MENU_PANEL: D2D1_COLOR_F = D2D1_COLOR_F {
     a: 1.0,
 };
 
+// The ink's opacity, by role, so each kind of thing reads the same
+// everywhere: what matters, the line under it, what's quiet, what can't be
+// used now, and a bar's track.
+const INK: f32 = 0.96;
+const INK_2: f32 = 0.62;
+const INK_3: f32 = 0.42;
+const OFF: f32 = 0.30;
+const TRACK: f32 = 0.16;
+
+/// The cover's corners in the open island; the notification's logo.
+const ART_RADIUS: f32 = 12.0;
+const TOAST_RADIUS: f32 = 12.0;
+
 fn white(a: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
         r: 1.0,
@@ -520,13 +535,30 @@ impl Text {
     fn new() -> Result<Self> {
         unsafe {
             let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-            let format = |family: PCWSTR,
-                          weight: DWRITE_FONT_WEIGHT,
+            // Windows 11's Segoe UI Variable, its optical size by the text's
+            // (Display for big, Text, Small for tiny); Segoe UI without it.
+            let variable = {
+                let mut fonts = None;
+                let (mut i, mut found) = (0, BOOL(0));
+                dw.GetSystemFontCollection(&mut fonts, false).is_ok()
+                    && fonts.is_some_and(|f| {
+                        f.FindFamilyName(w!("Segoe UI Variable Text"), &mut i, &mut found)
+                            .is_ok()
+                            && found.as_bool()
+                    })
+            };
+            let family = |size: f32| match () {
+                _ if !variable => w!("Segoe UI"),
+                _ if size >= 15.0 => w!("Segoe UI Variable Display"),
+                _ if size >= 12.0 => w!("Segoe UI Variable Text"),
+                _ => w!("Segoe UI Variable Small"),
+            };
+            let format = |weight: DWRITE_FONT_WEIGHT,
                           size: f32,
                           align: DWRITE_TEXT_ALIGNMENT|
              -> Result<IDWriteTextFormat> {
                 let f = dw.CreateTextFormat(
-                    family,
+                    family(size),
                     None,
                     weight,
                     DWRITE_FONT_STYLE_NORMAL,
@@ -545,36 +577,41 @@ impl Text {
                 f.SetTrimming(&trimming, &dw.CreateEllipsisTrimmingSign(&f)?)?;
                 Ok(f)
             };
-            let ui = w!("Segoe UI");
             let (n, b) = (DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-            let lines = format(ui, b, 16.0, DWRITE_TEXT_ALIGNMENT_LEADING)?;
+            let lines = format(b, 16.0, DWRITE_TEXT_ALIGNMENT_LEADING)?;
             lines.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
             lines.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+            let numbers = dw.CreateTypography()?;
+            numbers.AddFontFeature(DWRITE_FONT_FEATURE {
+                nameTag: DWRITE_FONT_FEATURE_TAG_TABULAR_FIGURES,
+                parameter: 1,
+            })?;
             Ok(Self {
                 lines,
-                title: format(ui, b, 17.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
-                artist: format(ui, n, 13.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
-                time: format(ui, n, 11.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
-                time_end: format(ui, n, 11.0, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
-                empty: format(ui, n, 14.0, DWRITE_TEXT_ALIGNMENT_CENTER)?,
-                peek: format(ui, b, 13.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
-                closed: format(ui, b, 12.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+                numbers,
+                title: format(b, 17.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+                artist: format(n, 13.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+                time: format(n, 11.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+                time_end: format(n, 11.0, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
+                empty: format(n, 14.0, DWRITE_TEXT_ALIGNMENT_CENTER)?,
+                peek: format(b, 13.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+                closed: format(b, 12.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
                 menu: {
                     let fonts = |look: menu::Look| -> Result<MenuFonts> {
                         let s = look.size();
                         Ok(MenuFonts {
-                            row: format(ui, n, s.font, DWRITE_TEXT_ALIGNMENT_LEADING)?,
-                            head: format(ui, b, s.head_font, DWRITE_TEXT_ALIGNMENT_LEADING)?,
-                            version: format(ui, n, s.version_font, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
+                            row: format(n, s.font, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+                            head: format(b, s.head_font, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+                            version: format(n, s.version_font, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
                         })
                     };
                     [fonts(menu::Look::Compact)?, fonts(menu::Look::Large)?]
                 },
-                clock: format(ui, b, 12.0, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
-                big: format(ui, b, 42.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
-                next: format(ui, n, 12.0, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
-                toast_title: format(ui, b, 15.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
-                toast_app: format(ui, n, 12.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+                clock: format(b, 12.0, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
+                big: format(b, 42.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+                next: format(n, 12.0, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
+                toast_title: format(b, 15.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+                toast_app: format(n, 12.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
                 dw: dw.clone(),
             })
         }
@@ -665,7 +702,7 @@ impl Renderer {
             };
             let fill = dc.CreateSolidColorBrush(&black, None)?;
             let ink = dc.CreateSolidColorBrush(&white(1.0), None)?;
-            let dim = dc.CreateSolidColorBrush(&white(0.55), None)?;
+            let dim = dc.CreateSolidColorBrush(&white(INK_2), None)?;
             let bars = Bars::new(&dcomp, &visual)?;
             Ok(Self {
                 bars,
@@ -931,7 +968,7 @@ impl Renderer {
                         width: NOTE_BOX,
                         height: NOTE_BOX,
                     };
-                    self.icon(Icon::Music, box_, 22.0, WHITE, 0.6 * alpha);
+                    self.icon(Icon::Music, box_, 22.0, WHITE, INK_2 * alpha);
                     dc.SetTransform(&m);
                 }
             }
@@ -1049,8 +1086,8 @@ impl Renderer {
             else {
                 return;
             };
-            self.ink.SetColor(&white(0.95 * alpha));
-            self.dim.SetColor(&white(0.55 * alpha));
+            self.ink.SetColor(&white(INK * alpha));
+            self.dim.SetColor(&white(INK_2 * alpha));
             let mut at = 0u32;
             for (s, dim) in spans {
                 let n = s.encode_utf16().count() as u32;
@@ -1093,6 +1130,33 @@ impl Renderer {
                     radiusY: radius,
                 },
                 &self.ink,
+            );
+        }
+    }
+
+    /// Digits that keep their width as they count (a clock, a time left):
+    /// Segoe UI Variable's own are proportional.
+    fn numbers(&self, s: &str, format: &IDWriteTextFormat, at: Rect, [r, g, b]: [f32; 3], a: f32) {
+        let text = utf16(s);
+        unsafe {
+            let Ok(layout) = self
+                .text
+                .dw
+                .CreateTextLayout(&text, format, at.width, at.height)
+            else {
+                return;
+            };
+            let all = DWRITE_TEXT_RANGE {
+                startPosition: 0,
+                length: text.len() as u32,
+            };
+            let _ = layout.SetTypography(&self.text.numbers, all);
+            self.ink.SetColor(&D2D1_COLOR_F { r, g, b, a });
+            self.dc.DrawTextLayout(
+                v(Point { x: at.x, y: at.y }),
+                &layout,
+                &self.ink,
+                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT | D2D1_DRAW_TEXT_OPTIONS_CLIP,
             );
         }
     }
@@ -1147,14 +1211,14 @@ impl Renderer {
                 Page::Home => Icon::Music,
                 Page::Focus => Icon::Timer,
             };
-            let a = if on { 0.95 } else { 0.5 };
+            let a = if on { INK } else { INK_3 };
             self.icon(icon, r, 16.0, WHITE, a * alpha);
         }
         let clock = shift(pages::clock(s.open.width), dx);
         if s.tabs_timer {
-            self.tinted(s.tabs_clock, &self.text.clock, clock, s.focus.tint(), alpha);
+            self.numbers(s.tabs_clock, &self.text.clock, clock, s.focus.tint(), alpha);
         } else {
-            self.text(s.tabs_clock, &self.text.clock, clock, 0.6 * alpha);
+            self.numbers(s.tabs_clock, &self.text.clock, clock, WHITE, INK_2 * alpha);
         }
     }
 
@@ -1162,38 +1226,59 @@ impl Renderer {
     /// color, a dot per round, and reset, play / pause and skip.
     fn draw_focus(&self, f: &FocusView, width: f32, dx: f32, alpha: f32) {
         let p = pages::focus_page(width);
-        self.text(f.label, &self.text.artist, shift(p.label, dx), 0.6 * alpha);
-        self.text(f.time, &self.text.big, shift(p.time, dx), 0.95 * alpha);
-        self.text(f.next, &self.text.next, shift(p.next, dx), 0.5 * alpha);
+        self.text(
+            f.label,
+            &self.text.artist,
+            shift(p.label, dx),
+            INK_2 * alpha,
+        );
+        self.numbers(
+            f.time,
+            &self.text.big,
+            shift(p.time, dx),
+            WHITE,
+            INK * alpha,
+        );
+        self.text(f.next, &self.text.next, shift(p.next, dx), INK_3 * alpha);
         let bar = shift(p.bar, dx);
-        self.rounded(bar, 2.0, 0.16 * alpha);
+        self.rounded(bar, 2.0, TRACK * alpha);
         if f.progress > 0.0 {
             let done = Rect {
                 width: bar.width * f.progress.clamp(0.0, 1.0),
                 ..bar
             };
-            self.tinted_rounded(done, 2.0, f.tint(), 0.95 * alpha);
+            self.tinted_rounded(done, 2.0, f.tint(), INK * alpha);
         }
+        // The dots end at the row's right, level with the label.
+        let step = pages::DOT + pages::DOT_GAP;
+        let first = p.dots.x + p.dots.width - (f.every as f32 * step - pages::DOT_GAP);
         for i in 0..f.every {
             let d = Rect {
-                x: dx + p.dots.x + i as f32 * (pages::DOT + pages::DOT_GAP),
+                x: dx + first + i as f32 * step,
                 width: pages::DOT,
                 ..p.dots
             };
             if i < f.rounds {
-                self.tinted_rounded(d, pages::DOT / 2.0, FOCUS_TINT, 0.9 * alpha);
+                self.tinted_rounded(d, pages::DOT / 2.0, FOCUS_TINT, INK * alpha);
             } else {
-                self.rounded(d, pages::DOT / 2.0, 0.2 * alpha);
+                self.rounded(d, pages::DOT / 2.0, OFF * alpha);
             }
         }
         let play = if f.running { Icon::Pause } else { Icon::Play };
         for (b, icon, size) in [
             (FocusButton::Reset, Icon::Reset, 19.0),
-            (FocusButton::PlayPause, play, 24.0),
+            (FocusButton::PlayPause, play, 22.0),
             (FocusButton::Skip, Icon::Next, 19.0),
         ] {
             let r = shift(pages::focus_button(b, width), dx);
-            self.icon(icon, r, size, WHITE, 0.95 * alpha);
+            if b == FocusButton::PlayPause {
+                // On a disc in the phase's color, as the player's.
+                let tint = f.tint();
+                self.tinted_rounded(r, r.width / 2.0, tint, INK * alpha);
+                self.icon(icon, r, size, color::ink_on(tint), INK * alpha);
+            } else {
+                self.icon(icon, r, size, WHITE, INK * alpha);
+            }
         }
     }
 
@@ -1205,7 +1290,7 @@ impl Renderer {
                 width: s.open.width,
                 height: pages::PAGE_HEIGHT,
             };
-            self.text(s.empty, &self.text.empty, all, 0.6 * alpha);
+            self.text(s.empty, &self.text.empty, all, INK_2 * alpha);
             return;
         };
         let p = layout::player(s.open);
@@ -1221,29 +1306,34 @@ impl Renderer {
                     width: art.width + 2.0 * g,
                     height: art.height + 2.0 * g,
                 };
-                self.tinted_rounded(r, 10.0 + g, theme, 0.035 * alpha);
+                self.tinted_rounded(r, ART_RADIUS + g, theme, 0.035 * alpha);
             }
         }
-        self.draw_art(t, art, 10.0, alpha, s.island_scale.max(1.0) * s.scale);
-        self.text(&t.title, &self.text.title, shift(p.title, dx), alpha);
+        self.draw_art(t, art, ART_RADIUS, alpha, s.island_scale.max(1.0) * s.scale);
+        self.text(&t.title, &self.text.title, shift(p.title, dx), INK * alpha);
         let artist = if t.artist.is_empty() {
             &t.album
         } else {
             &t.artist
         };
-        self.text(artist, &self.text.artist, shift(p.artist, dx), 0.6 * alpha);
+        self.text(
+            artist,
+            &self.text.artist,
+            shift(p.artist, dx),
+            INK_2 * alpha,
+        );
         // The player takes the cover's color: the progress and the play
         // button (white for a gray cover).
         let theme = self.theme();
         let bar = shift(p.bar, dx);
-        self.tinted_rounded(bar, 2.0, theme, 0.16 * alpha);
+        self.tinted_rounded(bar, 2.0, theme, TRACK * alpha);
         if t.duration_ms > 0 {
             let done = (s.position_ms as f32 / t.duration_ms as f32).clamp(0.0, 1.0);
             let filled = Rect {
                 width: bar.width * done,
                 ..bar
             };
-            self.tinted_rounded(filled, 2.0, theme, 0.95 * alpha);
+            self.tinted_rounded(filled, 2.0, theme, INK * alpha);
             // The playhead, a dot a little taller than the bar.
             let head = Rect {
                 x: filled.x + filled.width - 4.0,
@@ -1253,17 +1343,19 @@ impl Renderer {
             };
             self.tinted_rounded(head, 4.0, theme, alpha);
             let times = shift(p.times, dx);
-            self.text(
+            self.numbers(
                 &fmt_time(s.position_ms),
                 &self.text.time,
                 times,
-                0.5 * alpha,
+                WHITE,
+                INK_3 * alpha,
             );
-            self.text(
+            self.numbers(
                 &fmt_time(t.duration_ms),
                 &self.text.time_end,
                 times,
-                0.5 * alpha,
+                WHITE,
+                INK_3 * alpha,
             );
         }
         // Play and pause bigger than the skips, as on a phone.
@@ -1277,7 +1369,7 @@ impl Renderer {
             ),
             (Button::Next, Icon::Next, 19.0, t.can_next),
         ] {
-            let a = if on { 0.95 } else { 0.3 } * alpha;
+            let a = if on { INK } else { OFF } * alpha;
             let r = shift(layout::button(b, s.open), dx);
             if b == Button::PlayPause {
                 // On a disc in the cover's color, the icon in what reads.
@@ -1509,9 +1601,9 @@ impl Renderer {
             ..bar
         };
         if done.width > 0.0 {
-            self.tinted_rounded(done, bar.height / 2.0, tint, 0.95 * alpha);
+            self.tinted_rounded(done, bar.height / 2.0, tint, INK * alpha);
         }
-        self.tinted(n.detail, &self.text.clock, at(l.text), WHITE, 0.9 * alpha);
+        self.tinted(n.detail, &self.text.clock, at(l.text), WHITE, INK * alpha);
     }
 
     /// A notification, as on a phone: the app's logo; its name dim with
@@ -1525,8 +1617,8 @@ impl Renderer {
         let r = at(l.logo);
         let rounded = D2D1_ROUNDED_RECT {
             rect: rf(r),
-            radiusX: 11.0,
-            radiusY: 11.0,
+            radiusX: TOAST_RADIUS,
+            radiusY: TOAST_RADIUS,
         };
         let side = (TOAST_LOGO * scale).ceil();
         let dc = self.dc.clone();
@@ -1541,20 +1633,26 @@ impl Renderer {
             // No logo: the bell, on a square in the ring's color.
             None => {
                 let accent = self.toast_accent(n, scale);
-                self.tinted_rounded(r, 11.0, accent, 0.28 * alpha);
+                self.tinted_rounded(r, TOAST_RADIUS, accent, 0.28 * alpha);
                 self.icon(n.icon, r, 24.0, WHITE, alpha);
             }
         }
-        self.tinted(n.title, &self.text.toast_app, at(l.app), WHITE, 0.6 * alpha);
-        self.tinted(n.when, &self.text.next, at(l.when), WHITE, 0.45 * alpha);
+        self.tinted(
+            n.title,
+            &self.text.toast_app,
+            at(l.app),
+            WHITE,
+            INK_2 * alpha,
+        );
+        self.tinted(n.when, &self.text.next, at(l.when), WHITE, INK_3 * alpha);
         let title = if n.detail.is_empty() {
             n.title
         } else {
             n.detail
         };
-        self.text(title, &self.text.toast_title, at(l.title), 0.97 * alpha);
+        self.text(title, &self.text.toast_title, at(l.title), INK * alpha);
         if !n.body.is_empty() {
-            self.tinted(n.body, &self.text.artist, at(l.body), WHITE, 0.62 * alpha);
+            self.tinted(n.body, &self.text.artist, at(l.body), WHITE, INK_2 * alpha);
         }
     }
 
@@ -1667,7 +1765,7 @@ impl Renderer {
                     width: CLOSED_W - 62.0,
                     height: h,
                 };
-                self.text(time, &self.text.closed, text, 0.95 * alpha);
+                self.numbers(time, &self.text.closed, text, WHITE, INK * alpha);
             }
             return;
         };
@@ -1776,7 +1874,7 @@ impl Renderer {
                 width: mix(small.width, big.width),
                 height: mix(small.height, big.height),
             },
-            mix(radius, 10.0),
+            mix(radius, ART_RADIUS),
         ))
     }
 
@@ -2174,7 +2272,7 @@ impl Renderer {
             height: s.header,
         };
         self.text(m.title, &fonts.head, head, 1.0);
-        self.text(m.version, &fonts.version, head, 0.6);
+        self.text(m.version, &fonts.version, head, INK_2);
         let kinds: Vec<menu::Kind> = m.rows.iter().map(|r| r.kind).collect();
         for (i, (row, r)) in m.rows.iter().zip(s.rows(&kinds)).enumerate() {
             if row.kind == menu::Kind::Separator {
