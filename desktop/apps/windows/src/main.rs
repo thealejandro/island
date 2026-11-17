@@ -61,7 +61,7 @@ use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_ESCAPE,
+    TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_ESCAPE, VK_RETURN, VK_SPACE, VK_UP,
 };
 use windows::Win32::UI::Shell::{SHQueryUserNotificationState, ShellExecuteW};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -89,6 +89,9 @@ const MARGIN: f32 = 8.0;
 const HOVER_DELAY_MS: u32 = 120;
 
 const HOVER_TIMER: usize = 1;
+/// Moves a menu switch's knob, every 15 ms for `KNOB_MS` (on the menu's window).
+const KNOB_TIMER: usize = 20;
+const KNOB_MS: f32 = 120.0;
 /// Moves the progress bar on, once a second while open and playing.
 const TICK_TIMER: usize = 3;
 /// Ends the glance on a new song (one for all the islands).
@@ -248,6 +251,23 @@ struct MenuWindow {
     startup: bool,
     /// Compact, or large for the offer.
     look: menu::Look,
+    /// A switch just flipped: its row, whether it is on now, and when.
+    flip: Option<(usize, bool, Instant)>,
+}
+
+/// Windows' "Animation effects" (Settings, Accessibility): off, the menu
+/// shows at once and its switches jump.
+fn animations_on() -> bool {
+    let mut on = BOOL(1);
+    unsafe {
+        let _ = windows::Win32::UI::WindowsAndMessaging::SystemParametersInfoW(
+            windows::Win32::UI::WindowsAndMessaging::SPI_GETCLIENTAREAANIMATION,
+            0,
+            Some(&mut on as *mut BOOL as *mut _),
+            windows::Win32::UI::WindowsAndMessaging::SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        );
+    }
+    on.as_bool()
 }
 // windows-rs only has it under the (big) Win32_UI_Controls feature.
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -2311,12 +2331,25 @@ impl App {
                 tracking: false,
                 startup: startup_on,
                 look,
+                flip: None,
             });
             self.draw_menu();
+            let r = self
+                .surfaces
+                .iter()
+                .find(|s| s.hwnd == owner)
+                .and_then(|s| s.renderer.as_ref());
+            if let (true, Some(r), Some(m)) = (animations_on(), r, &self.menu) {
+                // It rises from below as Windows' own flyouts do.
+                let _ = r.menu_appear(&m.target, 6.0 * k);
+            }
             let _ = ShowWindow(hwnd, SW_SHOW);
             // Focused, so a click anywhere else (it loses the focus) or Esc
             // closes it.
-            let _ = SetForegroundWindow(hwnd);
+            // (Not under QA: it takes nobody's focus.)
+            if !qa_mode() {
+                let _ = SetForegroundWindow(hwnd);
+            }
         }
     }
 
@@ -2402,8 +2435,52 @@ impl App {
             rows: &rows,
             hover: m.hover,
             look: m.look,
+            knob: m.flip.map(|(i, on, at)| {
+                let t = (at.elapsed().as_secs_f32() * 1000.0 / KNOB_MS).min(1.0);
+                let e = 1.0 - (1.0 - t).powi(3);
+                (i, if on { e } else { 1.0 - e })
+            }),
         };
         let _ = r.draw_menu(&mut m.target, &view);
+    }
+
+    /// Entry `i` of the menu chosen: a switch flips (its knob gliding) and
+    /// the menu stays to flip more; anything else closes it and runs.
+    /// `true` for the settings, opened with nothing borrowed.
+    fn menu_choose(&mut self, i: usize) -> bool {
+        let Some(startup) = self.menu.as_ref().map(|m| m.startup) else {
+            return false;
+        };
+        let mut rows = self.menu_rows(startup);
+        if i >= rows.len() {
+            return false;
+        }
+        let (id, row) = rows.swap_remove(i);
+        if !row.enabled || row.kind == MenuKind::Separator {
+            return false;
+        }
+        if row.kind != MenuKind::Toggle {
+            self.close_menu();
+            if id == MENU_SETTINGS {
+                return true;
+            }
+            self.command(id);
+            return false;
+        }
+        self.command(id);
+        let startup = startup::is_on();
+        let now_on = self.menu_rows(startup).get(i).is_some_and(|r| r.1.on);
+        if let Some(m) = &mut self.menu {
+            m.startup = startup;
+            if now_on != row.on && animations_on() {
+                m.flip = Some((i, now_on, Instant::now()));
+                unsafe {
+                    SetTimer(Some(m.hwnd), KNOB_TIMER, 15, None);
+                }
+            }
+        }
+        self.draw_menu();
+        false
     }
 
     /// The menu window's messages. `true` when it asks to open the
@@ -2444,29 +2521,48 @@ impl App {
                 }
             }
             WM_LBUTTONUP => {
-                let Some(i) = ms.hit(&kinds, at.0, at.1) else {
-                    return (Some(LRESULT(0)), false);
-                };
-                let (id, row) = self.menu_rows(startup).swap_remove(i);
-                if !row.enabled {
-                    return (Some(LRESULT(0)), false);
-                }
-                if row.kind == MenuKind::Toggle {
-                    // The switch flips; the menu stays to flip more.
-                    self.command(id);
-                    if let Some(m) = &mut self.menu {
-                        m.startup = startup::is_on();
-                    }
-                    self.draw_menu();
-                } else {
-                    self.close_menu();
-                    if id == MENU_SETTINGS {
-                        return (Some(LRESULT(0)), true);
-                    }
-                    self.command(id);
+                if let Some(i) = ms.hit(&kinds, at.0, at.1) {
+                    return (Some(LRESULT(0)), self.menu_choose(i));
                 }
             }
             WM_KEYDOWN if wp.0 == VK_ESCAPE.0 as usize => self.close_menu(),
+            // The arrows go through what can be chosen; Enter or Space
+            // chooses it.
+            WM_KEYDOWN if wp.0 == VK_UP.0 as usize || wp.0 == VK_DOWN.0 as usize => {
+                let rows = self.menu_rows(startup);
+                let n = rows.len();
+                let usable = |i: usize| rows[i].1.enabled && rows[i].1.kind != MenuKind::Separator;
+                let m = self.menu.as_mut().unwrap();
+                let down = wp.0 == VK_DOWN.0 as usize;
+                let mut i = m.hover.unwrap_or(if down { n - 1 } else { 0 });
+                for _ in 0..n {
+                    i = if down { (i + 1) % n } else { (i + n - 1) % n };
+                    if usable(i) {
+                        break;
+                    }
+                }
+                if usable(i) && m.hover != Some(i) {
+                    m.hover = Some(i);
+                    self.draw_menu();
+                }
+            }
+            WM_KEYDOWN if wp.0 == VK_RETURN.0 as usize || wp.0 == VK_SPACE.0 as usize => {
+                if let Some(i) = self.menu.as_ref().and_then(|m| m.hover) {
+                    return (Some(LRESULT(0)), self.menu_choose(i));
+                }
+            }
+            WM_TIMER if wp.0 == KNOB_TIMER => {
+                let m = self.menu.as_mut().unwrap();
+                if m.flip
+                    .is_some_and(|(_, _, at)| at.elapsed().as_secs_f32() * 1000.0 >= KNOB_MS)
+                {
+                    m.flip = None;
+                    unsafe {
+                        let _ = KillTimer(Some(hwnd), KNOB_TIMER);
+                    }
+                }
+                self.draw_menu();
+            }
             // Focus elsewhere: a click outside it.
             WM_ACTIVATE if wp.0 & 0xFFFF == 0 => unsafe {
                 let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
