@@ -124,6 +124,24 @@ pub struct Scene<'a> {
     /// The glance's content changing in place (a line of lyrics, a notice
     /// ending): the one before leaves as the new one comes in.
     pub swap: Option<Swap<'a>>,
+    /// The page being left for `page`, and how far along (linear, 0 to 1).
+    pub page_from: Option<(Page, f32)>,
+    /// What the pointer is over in the open island, and whether it's down.
+    pub hot: Option<Hot>,
+    pub pressed: bool,
+}
+
+/// Something in the open island that answers a click.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hot {
+    Tab(Page),
+    Media(Button),
+    Focus(FocusButton),
+}
+
+/// Ease out (cubic): quick at first, settling at the end.
+fn ease_out(t: f32) -> f32 {
+    1.0 - (1.0 - t).powi(3)
 }
 
 /// What the glance showed before a change in place.
@@ -139,7 +157,7 @@ pub enum Before<'a> {
 #[derive(Clone, Copy)]
 pub struct Swap<'a> {
     pub before: Before<'a>,
-    /// How far along, eased: 0 just changed, 1 done.
+    /// How far along, linear: 0 just changed, 1 done.
     pub t: f32,
 }
 
@@ -488,6 +506,17 @@ const INK_2: f32 = 0.62;
 const INK_3: f32 = 0.42;
 const OFF: f32 = 0.30;
 const TRACK: f32 = 0.16;
+
+/// Under the pointer, and while pressed.
+const HOVER: f32 = 0.10;
+const PRESSED: f32 = 0.16;
+const HOVER_DISC: f32 = 36.0;
+/// How far a page slides as the tabs change, and how long that takes.
+const PAGE_SLIDE: f32 = 8.0;
+
+fn hover(pressed: bool) -> f32 {
+    if pressed { PRESSED } else { HOVER }
+}
 
 /// The cover's corners in the open island; the notification's logo.
 const ART_RADIUS: f32 = 12.0;
@@ -1184,34 +1213,107 @@ impl Renderer {
             self.dc
                 .SetTransform(&(Matrix3x2::translation(0.0, pages::PAGE_Y) * m));
         }
-        match s.page {
-            Page::Home => self.draw_home(s, dx, alpha),
-            Page::Focus => self.draw_focus(&s.focus, s.open.width, dx, alpha),
+        match s.page_from {
+            // The page left fades out, sliding away from the new one, which
+            // comes in from the other side; the old is mostly gone first.
+            Some((from, t)) if from != s.page => {
+                let index = |p: Page| Page::ALL.iter().position(|&q| q == p).unwrap_or(0);
+                let way = if index(s.page) > index(from) {
+                    1.0
+                } else {
+                    -1.0
+                };
+                let (gone, come) = (ease_out((t / 0.6).min(1.0)), ease_out(t));
+                let old = alpha * (1.0 - gone);
+                if old > 0.0 {
+                    self.draw_page(s, from, dx - way * PAGE_SLIDE * gone, old);
+                }
+                self.draw_page(
+                    s,
+                    s.page,
+                    dx + way * PAGE_SLIDE * (1.0 - come),
+                    alpha * come,
+                );
+            }
+            _ => self.draw_page(s, s.page, dx, alpha),
         }
         unsafe {
             self.dc.SetTransform(&m);
         }
     }
 
+    fn draw_page(&mut self, s: &Scene, page: Page, dx: f32, alpha: f32) {
+        match page {
+            Page::Home => self.draw_home(s, dx, alpha),
+            Page::Focus => self.draw_focus(s, dx, alpha),
+        }
+    }
+
+    /// A button on a disc of its own, a little lighter under the pointer.
+    fn lit(&self, s: &Scene, hot: Hot, r: Rect, alpha: f32) {
+        if s.hot == Some(hot) && s.page_from.is_none() {
+            self.rounded(r, r.width / 2.0, hover(s.pressed) * 1.5 * alpha);
+        }
+    }
+
+    /// A soft disc behind a button the pointer is over (`HOVER_DISC` wide).
+    fn hover_disc(&self, s: &Scene, hot: Hot, r: Rect, alpha: f32) {
+        if s.hot != Some(hot) || s.page_from.is_some() {
+            return;
+        }
+        let d = Rect {
+            x: r.x + (r.width - HOVER_DISC) / 2.0,
+            y: r.y + (r.height - HOVER_DISC) / 2.0,
+            width: HOVER_DISC,
+            height: HOVER_DISC,
+        };
+        self.rounded(d, HOVER_DISC / 2.0, hover(s.pressed) * alpha);
+    }
+
     /// One icon per page, the one shown on a soft pill; the time of day
     /// (or the focus timer, in its color) at the right.
     fn draw_tabs(&self, s: &Scene, dx: f32, alpha: f32) {
+        // The pill glides from the tab left to the one chosen.
+        let (from, e) = match s.page_from {
+            Some((from, t)) => (from, ease_out(t)),
+            None => (s.page, 1.0),
+        };
+        let index = |p: Page| Page::ALL.iter().position(|&q| q == p).unwrap_or(0);
+        let (a, b) = (pages::tab(index(from)), pages::tab(index(s.page)));
+        let pill = shift(
+            Rect {
+                x: a.x + (b.x - a.x) * e,
+                ..b
+            },
+            dx,
+        );
+        let tint = if s.track.is_some() {
+            self.theme()
+        } else {
+            WHITE
+        };
         for (i, page) in Page::ALL.into_iter().enumerate() {
             let r = shift(pages::tab(i), dx);
-            let on = page == s.page;
-            if on {
-                let tint = if s.track.is_some() {
-                    self.theme()
-                } else {
-                    WHITE
-                };
-                self.tinted_rounded(r, r.height / 2.0, tint, 0.18 * alpha);
+            if page != s.page && s.hot == Some(Hot::Tab(page)) {
+                self.rounded(r, r.height / 2.0, hover(s.pressed) * alpha);
             }
+        }
+        self.tinted_rounded(pill, pill.height / 2.0, tint, 0.18 * alpha);
+        for (i, page) in Page::ALL.into_iter().enumerate() {
+            let r = shift(pages::tab(i), dx);
             let icon = match page {
                 Page::Home => Icon::Music,
                 Page::Focus => Icon::Timer,
             };
-            let a = if on { INK } else { INK_3 };
+            // Lit as much as the pill is on it.
+            let on = if page == s.page {
+                e
+            } else if page == from {
+                1.0 - e
+            } else {
+                0.0
+            };
+            let a = INK_3 + (INK - INK_3) * on;
             self.icon(icon, r, 16.0, WHITE, a * alpha);
         }
         let clock = shift(pages::clock(s.open.width), dx);
@@ -1224,7 +1326,8 @@ impl Renderer {
 
     /// The focus page: the phase, the time left big, a bar in the phase's
     /// color, a dot per round, and reset, play / pause and skip.
-    fn draw_focus(&self, f: &FocusView, width: f32, dx: f32, alpha: f32) {
+    fn draw_focus(&self, s: &Scene, dx: f32, alpha: f32) {
+        let (f, width) = (&s.focus, s.open.width);
         let p = pages::focus_page(width);
         self.text(
             f.label,
@@ -1275,8 +1378,10 @@ impl Renderer {
                 // On a disc in the phase's color, as the player's.
                 let tint = f.tint();
                 self.tinted_rounded(r, r.width / 2.0, tint, INK * alpha);
+                self.lit(s, Hot::Focus(b), r, alpha);
                 self.icon(icon, r, size, color::ink_on(tint), INK * alpha);
             } else {
+                self.hover_disc(s, Hot::Focus(b), r, alpha);
                 self.icon(icon, r, size, WHITE, INK * alpha);
             }
         }
@@ -1374,8 +1479,14 @@ impl Renderer {
             if b == Button::PlayPause {
                 // On a disc in the cover's color, the icon in what reads.
                 self.tinted_rounded(r, r.width / 2.0, theme, a);
+                if on {
+                    self.lit(s, Hot::Media(b), r, alpha);
+                }
                 self.icon(icon, r, 22.0, color::ink_on(theme), a);
             } else {
+                if on {
+                    self.hover_disc(s, Hot::Media(b), r, alpha);
+                }
                 self.icon(icon, r, size, WHITE, a);
             }
         }
@@ -1467,8 +1578,14 @@ impl Renderer {
         // A change in place: the content before slides up and away as the
         // new one rises into its place.
         let (t, before) = s.swap.map_or((1.0, None), |w| (w.t, Some(w.before)));
-        let (new_a, old_a) = (alpha * t, alpha * (1.0 - t));
-        let (new_dy, old_dy) = (SWAP_SLIDE * (1.0 - t), -SWAP_SLIDE * t);
+        // In turn, overlapping a little: the old one is mostly gone before
+        // the new one is readable, so the two never blur together.
+        let (gone, come) = (
+            ease_out((t / 0.45).min(1.0)),
+            ease_out(((t - 0.3) / 0.7).clamp(0.0, 1.0)),
+        );
+        let (new_a, old_a) = (alpha * come, alpha * (1.0 - gone));
+        let (new_dy, old_dy) = (SWAP_SLIDE * (1.0 - come), -SWAP_SLIDE * gone);
         // The cover and bars stay put when only the line changes.
         let same_song = s.notice.is_none() && !matches!(before, Some(Before::Notice(_)));
         // A toast is laid out for its own, bigger body: one coming or going

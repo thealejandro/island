@@ -57,18 +57,20 @@ pub fn glances(moment: Moment, quiet: bool, in_full_screen: bool) -> bool {
 /// it, with room for the app's logo and two lines (DIPs).
 pub const SIZE: (f32, f32) = (460.0, 84.0);
 
-/// How long the ring around the island pulses as one arrives, in ms.
-pub const PULSE_MS: f32 = 1800.0;
+/// How long the arrival is animated, in ms: as long as the light's lap.
+pub const PULSE_MS: f32 = ORBIT_DELAY + ORBIT_MS;
+/// The ring flashes once as one arrives, this long.
+const FLASH_MS: f32 = 600.0;
 
-/// How bright the ring in the app's color is, `ms` after it arrived: three
-/// beats, then a steady glow while the glance stays.
+/// How bright the ring in the app's color is, `ms` after it arrived: one
+/// flash that fades, then a steady glow while the glance stays.
 pub fn ring(ms: f32) -> f32 {
     const REST: f32 = 0.3;
-    if !(0.0..PULSE_MS).contains(&ms) {
+    if !(0.0..FLASH_MS).contains(&ms) {
         return REST;
     }
-    let beat = (std::f32::consts::PI * ms / (PULSE_MS / 3.0)).sin();
-    REST + (1.0 - REST) * beat * beat
+    let left = 1.0 - ms / FLASH_MS;
+    REST + (1.0 - REST) * left * left
 }
 
 /// How long the light runs around the island's edge as one arrives (ms).
@@ -262,13 +264,16 @@ mod tests {
     }
 
     #[test]
-    fn the_ring_beats_then_rests() {
-        assert_eq!(ring(0.0), ring(PULSE_MS));
-        assert!(ring(PULSE_MS / 6.0) > 0.99);
-        assert!(ring(PULSE_MS / 3.0) < 0.31);
+    fn the_ring_flashes_once_then_rests() {
+        assert!(ring(0.0) > 0.99);
+        assert!(ring(FLASH_MS / 2.0) < ring(FLASH_MS / 4.0));
+        assert_eq!(ring(FLASH_MS), ring(PULSE_MS));
         assert_eq!(ring(10_000.0), ring(PULSE_MS));
-        // No jump where the beats end.
-        assert!((ring(PULSE_MS - 1.0) - ring(PULSE_MS)).abs() < 0.01);
+        // No jump where the flash ends.
+        assert!((ring(FLASH_MS - 1.0) - ring(FLASH_MS)).abs() < 0.01);
+        // The arrival lasts as long as the light runs around.
+        assert!(orbit(PULSE_MS - 1.0).is_some());
+        assert_eq!(orbit(PULSE_MS), None);
     }
 
     #[test]
