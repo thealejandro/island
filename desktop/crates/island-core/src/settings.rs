@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 use crate::color;
 use crate::focus::Lengths;
 use crate::media::{self, SongText, TextAlign};
-use crate::monitor::{GlanceScreen, MonitorChoice, Pick};
+use crate::monitor::{FullScreen, GlanceScreen, MonitorChoice, Pick};
 use crate::pages::Page;
 use crate::shape::{Placement, Style};
 
@@ -157,9 +157,10 @@ pub struct Settings {
     pub bluetooth_glance: bool,
     /// A glance when a notification shows: its app and title.
     pub notification_glance: bool,
-    /// Those glances while an app is in full screen too (never while
-    /// presenting or in a game).
-    pub notifications_in_full_screen: bool,
+    /// Where those glances go while an app is in full screen on a screen
+    /// (never while presenting or in a game): over it, on another screen,
+    /// or nowhere.
+    pub notifications_in_full_screen: FullScreen,
     /// Windows' notification sound when a glance shows while the banners
     /// are off ("Notifications only in the island").
     pub notification_sound: bool,
@@ -207,7 +208,7 @@ impl Default for Settings {
             privacy_glance: true,
             bluetooth_glance: true,
             notification_glance: true,
-            notifications_in_full_screen: true,
+            notifications_in_full_screen: FullScreen::Here,
             notification_sound: true,
             update_check: true,
             lyrics_delay: None,
@@ -248,7 +249,7 @@ pub const TEMPLATE: &str = r#"{
   "privacyGlance": true,
   "bluetoothGlance": true,
   "notificationGlance": true,
-  "notificationsInFullScreen": true,
+  "notificationsInFullScreen": "here",
   "notificationSound": true,
   "updateCheck": true,
   "lyricsDelay": "auto"
@@ -343,10 +344,10 @@ impl Settings {
             privacy_glance: flag("privacyGlance", d.privacy_glance),
             bluetooth_glance: flag("bluetoothGlance", d.bluetooth_glance),
             notification_glance: flag("notificationGlance", d.notification_glance),
-            notifications_in_full_screen: flag(
-                "notificationsInFullScreen",
-                d.notifications_in_full_screen,
-            ),
+            notifications_in_full_screen: o
+                .get("notificationsInFullScreen")
+                .and_then(FullScreen::parse)
+                .unwrap_or(d.notifications_in_full_screen),
             notification_sound: flag("notificationSound", d.notification_sound),
             update_check: flag("updateCheck", d.update_check),
             // A number in range; "auto" or anything else: by the speakers.
@@ -540,7 +541,24 @@ mod tests {
         assert!(!parse(r#"{"privacyGlance": false}"#).privacy_glance);
         assert!(!parse(r#"{"bluetoothGlance": false}"#).bluetooth_glance);
         assert!(!parse(r#"{"notificationGlance": false}"#).notification_glance);
-        assert!(!parse(r#"{"notificationsInFullScreen": false}"#).notifications_in_full_screen);
+        let fs = |t: &str| parse(t).notifications_in_full_screen;
+        assert_eq!(
+            fs(r#"{"notificationsInFullScreen": false}"#),
+            FullScreen::Hide
+        );
+        assert_eq!(
+            fs(r#"{"notificationsInFullScreen": true}"#),
+            FullScreen::Here
+        );
+        assert_eq!(
+            fs(r#"{"notificationsInFullScreen": "other"}"#),
+            FullScreen::Other
+        );
+        assert_eq!(
+            fs(r#"{"notificationsInFullScreen": "x"}"#),
+            FullScreen::Here
+        );
+        assert_eq!(fs(TEMPLATE), FullScreen::Here);
         assert!(!parse(r#"{"notificationSound": false}"#).notification_sound);
         assert!(parse(r#"{"notificationSound": "no"}"#).notification_sound);
         // The lyrics' delay: a number wins over the speakers; else by them.

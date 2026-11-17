@@ -392,6 +392,8 @@ struct Text {
 /// A menu's rows, name and version.
 struct MenuFonts {
     row: IDWriteTextFormat,
+    /// A choice's value, at the row's right end.
+    value: IDWriteTextFormat,
     head: IDWriteTextFormat,
     version: IDWriteTextFormat,
 }
@@ -400,6 +402,8 @@ struct MenuFonts {
 pub struct MenuRow<'a> {
     pub kind: menu::Kind,
     pub label: std::borrow::Cow<'a, str>,
+    /// A choice's value in use, on the right.
+    pub value: &'a str,
     pub on: bool,
     pub enabled: bool,
 }
@@ -647,6 +651,7 @@ impl Text {
                         let s = look.size();
                         Ok(MenuFonts {
                             row: format(n, s.font, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+                            value: format(n, s.font, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
                             head: format(b, s.head_font, DWRITE_TEXT_ALIGNMENT_LEADING)?,
                             version: format(n, s.version_font, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
                         })
@@ -2504,6 +2509,14 @@ impl Renderer {
                 height: r.height,
             };
             self.text(&row.label, &fonts.row, label, a);
+            if row.kind == menu::Kind::Choice {
+                let value = Rect {
+                    x: s.text_x,
+                    width: r.x + r.width - s.switch_end - s.text_x,
+                    ..label
+                };
+                self.text(row.value, &fonts.value, value, a * INK_2);
+            }
             if let Some(sw) = switch {
                 let radius = sw.height / 2.0;
                 let t = match m.knob {

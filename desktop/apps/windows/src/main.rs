@@ -338,6 +338,8 @@ const MENU_PORTABLE: u32 = 8;
 const MENU_UPDATE: u32 = 9;
 const MENU_NOT_NOW: u32 = 10;
 const MENU_SMOOTH: u32 = 11;
+const MENU_GLANCE_SCREEN: u32 = 12;
+const MENU_FULL_SCREEN: u32 = 13;
 /// The screens' switches: this plus the screen's index in `App::screens`.
 const MENU_SCREEN: u32 = 100;
 const MENU_CLASS: PCWSTR = w!("IslandMenu");
@@ -1224,6 +1226,34 @@ impl App {
         line.map_or(Before::Song, Before::Line)
     }
 
+    /// Which islands a glance shows on: by `glanceScreen`, and a
+    /// notification's (`toast`) by `notificationsInFullScreen` too.
+    fn glance_targets(&self, toast: bool) -> Vec<bool> {
+        let full: Vec<bool> = self.surfaces.iter().map(|s| s.full).collect();
+        // Off a full screen: to the main screen's island, else the
+        // leftmost.
+        let mut fallback: Vec<usize> = (0..self.surfaces.len()).collect();
+        fallback.sort_by(|&a, &b| {
+            let (a, b) = (&self.surfaces[a].monitor, &self.surfaces[b].monitor);
+            b.primary
+                .cmp(&a.primary)
+                .then(a.rect.x.total_cmp(&b.rect.x))
+                .then(a.rect.y.total_cmp(&b.rect.y))
+        });
+        let fs = if toast {
+            self.settings.notifications_in_full_screen
+        } else {
+            monitor::FullScreen::Here
+        };
+        monitor::glance_targets(
+            &full,
+            self.active_island(),
+            &fallback,
+            self.settings.glance_screen,
+            fs,
+        )
+    }
+
     /// A glance that tells something, for `ms` after its last change.
     fn notify(&mut self, n: Notice, ms: u32) {
         // A notice of the same kind (the volume again) just updates.
@@ -1231,11 +1261,7 @@ impl App {
         if !matches!(&before, Before::Notice(b) if b.title == n.title && b.icon == n.icon) {
             // Which islands it's for, decided once as it arrives (an
             // update keeps the first one's).
-            let to = monitor::glance_targets(
-                self.surfaces.len(),
-                self.active_island(),
-                self.settings.glance_screen,
-            );
+            let to = self.glance_targets(n.toast);
             let k = self.settings.island_scale;
             for (i, on) in to.into_iter().enumerate() {
                 let was_muted = std::mem::replace(&mut self.surfaces[i].muted, !on);
@@ -1351,9 +1377,10 @@ impl App {
     /// while a notification's glance shows over it; shows the rest.
     fn show_surfaces(&self) {
         use windows::Win32::UI::WindowsAndMessaging::{IsWindowVisible, SW_HIDE, SW_SHOWNA};
-        let hide_on = self.settings.hide_in_full_screen && !self.full_glance;
         for sf in &self.surfaces {
-            let hide = hide_on && sf.full;
+            // (The glance over it is only where it shows.)
+            let glance = self.full_glance && !sf.muted;
+            let hide = self.settings.hide_in_full_screen && sf.full && !glance;
             unsafe {
                 if IsWindowVisible(sf.hwnd).as_bool() == hide {
                     let _ = ShowWindow(sf.hwnd, if hide { SW_HIDE } else { SW_SHOWNA });
@@ -1370,29 +1397,13 @@ impl App {
         // As the user is now: presenting, a game, Do Not Disturb.
         let state = unsafe { SHQueryUserNotificationState() }.map_or(5, |s| s.0);
         let moment = island_core::notifications::Moment::from_state(state);
-        let full_screen = self.settings.notifications_in_full_screen;
-        if !island_core::notifications::glances(moment, notifications::quiet(), full_screen) {
+        if !island_core::notifications::glances(moment, notifications::quiet()) {
             return;
         }
-        if moment == island_core::notifications::Moment::FullScreen {
-            // An island hidden under it comes out for the glance.
-            self.full_glance = true;
-            self.show_surfaces();
-            // A full-screen window may have gone over an island: on top
-            // again (without taking the focus).
-            for sf in &self.surfaces {
-                unsafe {
-                    let _ = SetWindowPos(
-                        sf.hwnd,
-                        Some(HWND_TOPMOST),
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
-                    );
-                }
-            }
+        // Kept off every full screen there is (`hide`): nowhere to show,
+        // and no sound for it either.
+        if !self.glance_targets(true).contains(&true) {
+            return;
         }
         let t = a.toast;
         // An app new to the island: its next ones come without a banner.
@@ -1431,6 +1442,32 @@ impl App {
         }
         let ms = self.toast_ms(&n.body);
         self.notify(n, ms);
+        // Over a full-screen app: an island hidden under it comes out for
+        // the glance, and goes on top again (a full-screen window may have
+        // gone over it), without taking the focus. Only where it shows.
+        let over: Vec<HWND> = self
+            .surfaces
+            .iter()
+            .filter(|s| s.full && !s.muted)
+            .map(|s| s.hwnd)
+            .collect();
+        if !over.is_empty() {
+            self.full_glance = true;
+            self.show_surfaces();
+            for hwnd in over {
+                unsafe {
+                    let _ = SetWindowPos(
+                        hwnd,
+                        Some(HWND_TOPMOST),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+                    );
+                }
+            }
+        }
     }
 
     /// How long a notification's glance stays: longer with two lines of
@@ -1678,6 +1715,11 @@ impl App {
         self.notice = None;
         for sf in &mut self.surfaces {
             sf.muted = false;
+        }
+        // The glance over a full-screen app is gone: so is the island.
+        if self.full_glance {
+            self.full_glance = false;
+            self.show_surfaces();
         }
     }
 
@@ -1977,11 +2019,6 @@ impl App {
             // shrinking with it yet.
             if !peek && self.surfaces.iter().all(|s| s.last_frame.is_none()) {
                 self.clear_notice();
-                // The glance over a full-screen app is gone: so is the island.
-                if self.full_glance {
-                    self.full_glance = false;
-                    self.show_surfaces();
-                }
             }
         }
     }
@@ -2524,7 +2561,15 @@ impl App {
         let row = |kind, label: &'static str, on, enabled| render::MenuRow {
             kind,
             label: label.into(),
+            value: "",
             on,
+            enabled,
+        };
+        let choice = |label: &'static str, value: &'static str, enabled| render::MenuRow {
+            kind: MenuKind::Choice,
+            label: label.into(),
+            value,
+            on: false,
             enabled,
         };
         let (toggle, action, line) = (MenuKind::Toggle, MenuKind::Action, MenuKind::Separator);
@@ -2572,6 +2617,18 @@ impl App {
                 ),
             ),
             (
+                MENU_FULL_SCREEN,
+                choice(
+                    t.in_full_screen,
+                    match self.settings.notifications_in_full_screen {
+                        monitor::FullScreen::Here => t.fs_here,
+                        monitor::FullScreen::Other => t.fs_other,
+                        monitor::FullScreen::Hide => t.fs_hide,
+                    },
+                    self.settings.notification_glance,
+                ),
+            ),
+            (
                 MENU_SMOOTH,
                 row(
                     toggle,
@@ -2590,7 +2647,11 @@ impl App {
             (MENU_QUIT, row(action, t.quit, false, true)),
         ];
         if self.settings.update_check {
-            rows.insert(7, update);
+            let at = rows
+                .iter()
+                .position(|r| r.0 == MENU_SETTINGS)
+                .map_or(0, |i| i + 1);
+            rows.insert(at, update);
         }
         // With two screens or more, a switch for each: an island there or
         // not. The last island stays.
@@ -2620,10 +2681,19 @@ impl App {
                     render::MenuRow {
                         kind: toggle,
                         label: label.into(),
+                        value: "",
                         on: has,
                         enabled: !(has && on.len() == 1),
                     },
                 ));
+            }
+            // With islands on two screens or more: where glances show.
+            if self.surfaces.len() >= 2 {
+                let value = match self.settings.glance_screen {
+                    monitor::GlanceScreen::All => t.all_screens,
+                    monitor::GlanceScreen::Active => t.active_screen,
+                };
+                section.push((MENU_GLANCE_SCREEN, choice(t.glances_on, value, true)));
             }
             rows.splice(at..at, section);
         }
@@ -2859,6 +2929,12 @@ impl App {
         if !row.enabled || row.kind == MenuKind::Separator {
             return false;
         }
+        if row.kind == MenuKind::Choice {
+            // The next value, in place: the menu stays to see it.
+            self.command(id);
+            self.draw_menu();
+            return false;
+        }
         if row.kind != MenuKind::Toggle {
             self.close_menu();
             if id == MENU_SETTINGS {
@@ -3020,6 +3096,36 @@ impl App {
                     shape::Style::Classic => shape::Style::Smooth,
                 };
                 let _ = settings_file::set("shape", Value::String(file.shape.name().into()));
+                self.apply(file);
+                return;
+            }
+            // A choice moves to its next value. (A QA run never writes the
+            // real file.)
+            MENU_GLANCE_SCREEN => {
+                let all = monitor::GlanceScreen::ALL;
+                let at = all.iter().position(|&g| g == self.settings.glance_screen);
+                file.glance_screen = all[at.map_or(0, |i| (i + 1) % all.len())];
+                if !qa_mode() {
+                    let name = file.glance_screen.name();
+                    let _ = settings_file::set("glanceScreen", Value::String(name.into()));
+                }
+                self.apply(file);
+                return;
+            }
+            MENU_FULL_SCREEN => {
+                // Another screen means nothing with just one island.
+                let all: Vec<monitor::FullScreen> = monitor::FullScreen::ALL
+                    .into_iter()
+                    .filter(|&f| f != monitor::FullScreen::Other || self.surfaces.len() >= 2)
+                    .collect();
+                let now = self.settings.notifications_in_full_screen;
+                let at = all.iter().position(|&f| f == now);
+                file.notifications_in_full_screen = all[at.map_or(0, |i| (i + 1) % all.len())];
+                if !qa_mode() {
+                    let name = file.notifications_in_full_screen.name();
+                    let _ =
+                        settings_file::set("notificationsInFullScreen", Value::String(name.into()));
+                }
                 self.apply(file);
                 return;
             }

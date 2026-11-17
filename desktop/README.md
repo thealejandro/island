@@ -123,7 +123,7 @@ that isn't valid JSON is ignored until it is fixed.
 | `privacyGlance` | `true`, `false` | `true` |
 | `bluetoothGlance` | `true`, `false` | `true` |
 | `notificationGlance` | `true`, `false` | `true` |
-| `notificationsInFullScreen` | `true`, `false` | `true` |
+| `notificationsInFullScreen` | `here` (over the app), `other` (on another screen's island instead), `hide` (not over it); `true` and `false` still mean `here` and `hide` | `here` |
 | `notificationSound` | `true`, `false` | `true` |
 | `updateCheck` | `true`, `false` | `true` |
 | `lyricsDelay` | `auto`, or 0 to 2000 (ms) | `auto` |
@@ -236,7 +236,7 @@ With the banners off, the island plays Windows' own notification sound
 when one arrives, since Windows itself no longer does
 (`notificationSound: false` keeps it silent).
 With an app in full screen the glance shows too
-(`notificationsInFullScreen: false` keeps it away then); never while
+(`notificationsInFullScreen` moves it to another screen or keeps it away, screen by screen); never while
 presenting, in a game in exclusive full screen or with Do Not Disturb
 (except the one Windows 11 turns on by itself in full screen).
 A click on the glance opens the app that sent it (Windows lets no other app
