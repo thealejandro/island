@@ -167,9 +167,55 @@ pub fn toggle(
     MonitorChoice::List(picks)
 }
 
+/// Where a glance that tells something (a notification, the volume, a
+/// device) shows: on every island, or only on the active screen's. The
+/// song and its lyrics show on all either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GlanceScreen {
+    #[default]
+    All,
+    /// The screen with the window in front (the pointer's, without one).
+    Active,
+}
+
+impl GlanceScreen {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "all" => Some(Self::All),
+            "active" => Some(Self::Active),
+            _ => None,
+        }
+    }
+}
+
+/// Which of `islands` islands show a glance: all of them, or only the
+/// active screen's (`active`, an island's index); with that screen having
+/// no island, all of them, so nothing is missed.
+pub fn glance_targets(islands: usize, active: Option<usize>, screen: GlanceScreen) -> Vec<bool> {
+    match (screen, active) {
+        (GlanceScreen::Active, Some(a)) if a < islands => (0..islands).map(|i| i == a).collect(),
+        _ => vec![true; islands],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glances_go_to_the_active_screen_or_to_all() {
+        use GlanceScreen::*;
+        assert_eq!(glance_targets(2, Some(1), All), vec![true, true]);
+        assert_eq!(glance_targets(2, Some(1), Active), vec![false, true]);
+        assert_eq!(glance_targets(3, Some(0), Active), vec![true, false, false]);
+        // The active screen has no island: all of them.
+        assert_eq!(glance_targets(2, None, Active), vec![true, true]);
+        assert_eq!(glance_targets(2, Some(5), Active), vec![true, true]);
+        assert_eq!(glance_targets(1, Some(0), Active), vec![true]);
+        assert_eq!(glance_targets(0, None, Active), Vec::<bool>::new());
+        assert_eq!(GlanceScreen::parse(" ACTIVE "), Some(Active));
+        assert_eq!(GlanceScreen::parse("one"), None);
+    }
 
     fn mon(x: f32, y: f32, primary: bool) -> Monitor {
         let rect = Rect {

@@ -102,6 +102,7 @@ that isn't valid JSON is ignored until it is fixed.
 | `placement` | `top`, `floating`, `top-left`, `top-right` | `top` |
 | `shape` | `smooth` (continuous corners, rounder when open), `classic` | `smooth` |
 | `monitor` | `primary`, a screen's number counted left to right, `all`, or a list of screens like `[1, 3]` (`1,3` from `--monitor`) | `primary` |
+| `glanceScreen` | `all`, `active` (a notification's glance comes out only on the island of the screen being looked at, the one with the window in front; the song and lyrics stay on all) | `all` |
 | `textAlign` | `center`, `left` | `center` |
 | `songText` | `title-artist`, `artist-title`, `title`, `artist` | `title-artist` |
 | `lyrics` | `true`, `false` | `false` |

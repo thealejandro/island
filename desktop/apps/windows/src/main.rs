@@ -141,6 +141,35 @@ fn appbar(hwnd: HWND, add: bool) {
     }
 }
 
+/// The screen being looked at: the one with the window in front, where
+/// one types or reads (the pointer is often parked elsewhere); with none,
+/// or the desktop or a taskbar in front, the pointer's.
+fn active_monitor() -> HMONITOR {
+    use windows::Win32::Graphics::Gdi::{
+        MONITOR_DEFAULTTONEAREST, MonitorFromPoint, MonitorFromWindow,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetCursorPos, GetForegroundWindow,
+    };
+    unsafe {
+        let fg = GetForegroundWindow();
+        if !fg.is_invalid() {
+            let mut buf = [0u16; 64];
+            let n = GetClassNameW(fg, &mut buf).max(0) as usize;
+            let class = String::from_utf16_lossy(&buf[..n]);
+            if !matches!(
+                class.as_str(),
+                "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+            ) {
+                return MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+            }
+        }
+        let mut p = POINT::default();
+        let _ = GetCursorPos(&mut p);
+        MonitorFromPoint(p, MONITOR_DEFAULTTONEAREST)
+    }
+}
+
 /// The window in front covers the screen `mon` whole (the desktop doesn't
 /// count): what Explorer's word is checked against, as it may come to the
 /// islands of every screen.
@@ -393,6 +422,9 @@ struct Surface {
     swap: Option<(Before, Instant)>,
     /// An app is in full screen on this island's screen.
     full: bool,
+    /// The notice showing isn't for this island (`glanceScreen: active`,
+    /// another screen's): it goes on with the song as if there were none.
+    muted: bool,
 }
 
 impl Surface {
@@ -439,6 +471,7 @@ impl Surface {
             peek_most: layout::PEEK.0,
             swap: None,
             full: false,
+            muted: false,
         })
     }
 
@@ -566,9 +599,9 @@ fn alphas(sf: &Surface, k: f32, peek_h: f32) -> [f32; 3] {
 /// The glance's size before `islandScale`, in DIPs: a fixed one for a
 /// notice (a notification's, a level's, or the song's), as wide as the line
 /// needs for the song (see `layout::peek_width`).
-fn peek_unscaled(notice: &Option<Notice>, glance_on: bool, song_w: f32) -> (f32, f32) {
-    let level = notice.as_ref().is_some_and(|n| n.level.is_some());
-    if let Some(n) = notice.as_ref().filter(|n| n.toast) {
+fn peek_unscaled(notice: Option<&Notice>, glance_on: bool, song_w: f32) -> (f32, f32) {
+    let level = notice.is_some_and(|n| n.level.is_some());
+    if let Some(n) = notice.filter(|n| n.toast) {
         island_core::notifications::size(!n.body.is_empty())
     } else if level && !glance_on {
         glance::LEVEL
@@ -1050,7 +1083,7 @@ impl App {
             tabs_clock: &clock,
             tabs_timer: tm.running(),
             focus: focus_view,
-            notice: self.notice.as_ref().map(view),
+            notice: self.notice.as_ref().filter(|_| !sf.muted).map(view),
             closed_timer: (active && self.track.is_none()).then_some(left.as_str()),
             swap: sf.swap.as_ref().map(|(b, at)| render::Swap {
                 before: match b {
@@ -1196,10 +1229,21 @@ impl App {
         // A notice of the same kind (the volume again) just updates.
         let before = self.showing();
         if !matches!(&before, Before::Notice(b) if b.title == n.title && b.icon == n.icon) {
+            // Which islands it's for, decided once as it arrives (an
+            // update keeps the first one's).
+            let to = monitor::glance_targets(
+                self.surfaces.len(),
+                self.active_island(),
+                self.settings.glance_screen,
+            );
             let k = self.settings.island_scale;
-            for i in 0..self.surfaces.len() {
-                let peek_h = self.peek_unscaled_at(i).1 * k;
-                swap_from(&mut self.surfaces[i], k, peek_h, before.clone());
+            for (i, on) in to.into_iter().enumerate() {
+                let was_muted = std::mem::replace(&mut self.surfaces[i].muted, !on);
+                // Only where it shows, and changing from what showed there.
+                if on && !was_muted {
+                    let peek_h = self.peek_unscaled_at(i).1 * k;
+                    swap_from(&mut self.surfaces[i], k, peek_h, before.clone());
+                }
             }
         }
         self.notice = Some(n);
@@ -1283,6 +1327,16 @@ impl App {
             ..Default::default()
         };
         self.notify(n, PEEK_MS);
+    }
+
+    /// The island on the active screen, if that screen has one.
+    fn active_island(&self) -> Option<usize> {
+        #[cfg(feature = "qa")]
+        if let Some(j) = qa::active_screen() {
+            return Some(j);
+        }
+        let mon = active_monitor();
+        self.surfaces.iter().position(|s| s.mon == mon)
     }
 
     /// An app went full screen on island `i`'s screen, or left it.
@@ -1450,9 +1504,14 @@ impl App {
         self.peek && self.notice.as_ref().is_some_and(|n| n.toast)
     }
 
+    /// The same, on island `i`.
+    fn toast_shown_at(&self, i: usize) -> bool {
+        self.peek && self.notice_at(i).is_some_and(|n| n.toast)
+    }
+
     fn click(&mut self, i: usize, x: f32, y: f32) {
         // On a notification: its app, and the glance has done its job.
-        if !self.surfaces[i].open && self.toast_shown() {
+        if !self.surfaces[i].open && self.toast_shown_at(i) {
             if let Some(n) = &self.notice {
                 open_app(&n.app_id);
             }
@@ -1600,8 +1659,26 @@ impl App {
             && self.track.as_ref().is_some_and(|t| t.playing)
     }
 
-    fn peeking(&self) -> bool {
-        self.peek || self.glance()
+    /// Island `i` shows a glance: the lyrics', or a notice that is for it
+    /// (or the song's peek).
+    fn peeking(&self, i: usize) -> bool {
+        let muted = self.notice.is_some() && self.surfaces.get(i).is_some_and(|s| s.muted);
+        self.glance() || (self.peek && !muted)
+    }
+
+    /// The notice island `i` shows: none if it is another screen's.
+    fn notice_at(&self, i: usize) -> Option<&Notice> {
+        self.notice
+            .as_ref()
+            .filter(|_| !self.surfaces.get(i).is_some_and(|s| s.muted))
+    }
+
+    /// The notice goes: no island is left out of the next.
+    fn clear_notice(&mut self) {
+        self.notice = None;
+        for sf in &mut self.surfaces {
+            sf.muted = false;
+        }
     }
 
     /// The open island's layout now: a column for the lines if there are.
@@ -1616,7 +1693,7 @@ impl App {
     /// DIPs.
     fn peek_unscaled_at(&self, i: usize) -> (f32, f32) {
         let song_w = layout::peek_width(self.peek_w, self.surfaces[i].peek_most);
-        peek_unscaled(&self.notice, self.glance(), song_w)
+        peek_unscaled(self.notice_at(i), self.glance(), song_w)
     }
 
     /// Measures the closed island's and the song's glance's text, for
@@ -1777,7 +1854,7 @@ impl App {
     /// Aims one island's springs at the size its view has now.
     fn retarget_surface(&mut self, i: usize) {
         {
-            let peeking = self.peeking();
+            let peeking = self.peeking(i);
             let sf = &mut self.surfaces[i];
             if peeking && !sf.open {
                 sf.peek_view = true;
@@ -1785,7 +1862,7 @@ impl App {
         }
         self.fit_text();
         let k = self.settings.island_scale;
-        let peeking = self.peeking();
+        let peeking = self.peeking(i);
         let track_some = self.track.is_some();
         let peek_size = {
             let (w, h) = self.peek_unscaled_at(i);
@@ -1820,8 +1897,8 @@ impl App {
     /// Advances one island's springs and draws a frame; it asks for more
     /// frames only while it moves, so a still island costs nothing.
     fn surface_frame(&mut self, i: usize) {
-        let peeking = self.peeking();
-        let toast = self.toast_shown();
+        let peeking = self.peeking(i);
+        let toast = self.toast_shown_at(i);
         let mut moving;
         {
             let sf = &mut self.surfaces[i];
@@ -1868,10 +1945,11 @@ impl App {
                 self.page_from = None;
             }
         }
+        // (An island the notification isn't for draws no light for it.)
         if let Some(at) = self.pulse {
             let toast = self.notice.as_ref().is_some_and(|n| n.toast);
             if toast && at.elapsed().as_secs_f32() * 1000.0 < island_core::notifications::PULSE_MS {
-                moving = true;
+                moving |= !self.surfaces[i].muted;
             } else {
                 self.pulse = None;
             }
@@ -1898,7 +1976,7 @@ impl App {
             // The notice goes once every island is still: the others may be
             // shrinking with it yet.
             if !peek && self.surfaces.iter().all(|s| s.last_frame.is_none()) {
-                self.notice = None;
+                self.clear_notice();
                 // The glance over a full-screen app is gone: so is the island.
                 if self.full_glance {
                     self.full_glance = false;
@@ -2085,12 +2163,16 @@ impl App {
                 let b = self.showing();
                 if matches!(b, Before::Notice(_)) {
                     let k = self.settings.island_scale;
+                    // (Not on an island the notice wasn't for.)
                     for i in 0..self.surfaces.len() {
+                        if self.surfaces[i].muted {
+                            continue;
+                        }
                         let peek_h = self.peek_unscaled_at(i).1 * k;
                         swap_from(&mut self.surfaces[i], k, peek_h, b.clone());
                     }
                 }
-                self.notice = None;
+                self.clear_notice();
                 self.set_peek(true);
             }
         }
@@ -2178,7 +2260,11 @@ impl App {
                 if self.notice.is_some() && self.glance() {
                     let b = self.showing();
                     let k = self.settings.island_scale;
+                    // (Not on an island the notice wasn't for.)
                     for i in 0..self.surfaces.len() {
+                        if self.surfaces[i].muted {
+                            continue;
+                        }
                         let peek_h = self.peek_unscaled_at(i).1 * k;
                         swap_from(&mut self.surfaces[i], k, peek_h, b.clone());
                     }
@@ -2186,19 +2272,17 @@ impl App {
                 // Otherwise it stays while the islands shrink back (so it
                 // keeps its size and its look on the way) and goes once
                 // still.
-                let toast = self.toast_shown();
+                let waited: Vec<usize> = (0..self.surfaces.len())
+                    .filter(|&i| self.surfaces[i].tracking && self.toast_shown_at(i))
+                    .collect();
                 if self.glance() {
-                    self.notice = None;
+                    self.clear_notice();
                 }
                 self.set_peek(false);
                 // The pointer waited on a notification for the player: it
                 // opens now.
-                if toast {
-                    for i in 0..self.surfaces.len() {
-                        if self.surfaces[i].tracking {
-                            self.set_open(i, true);
-                        }
-                    }
+                for i in waited {
+                    self.set_open(i, true);
                 }
             }
             WM_TIMER if wp.0 == FOCUS_TIMER => self.focus_ended(),
@@ -2326,7 +2410,7 @@ impl App {
                     }
                 }
                 // A notification stays while the pointer is on it.
-                if !self.surfaces[i].open && self.toast_shown() {
+                if !self.surfaces[i].open && self.toast_shown_at(i) {
                     unsafe {
                         let _ = KillTimer(Some(self.anchor), PEEK_TIMER);
                     }
@@ -2343,7 +2427,7 @@ impl App {
                 unsafe {
                     let _ = KillTimer(Some(hwnd), HOVER_TIMER);
                     // Off a notification: it goes a moment later.
-                    if self.toast_shown() {
+                    if self.toast_shown_at(i) {
                         SetTimer(Some(self.anchor), PEEK_TIMER, TOAST_LEFT_MS, None);
                     }
                 }
@@ -2356,7 +2440,7 @@ impl App {
                 // Over a notification the pointer is there to click it: the
                 // player waits until it is gone (it opens then, see
                 // PEEK_TIMER), with no timer running meanwhile.
-                if self.surfaces[i].tracking && !self.toast_shown() {
+                if self.surfaces[i].tracking && !self.toast_shown_at(i) {
                     self.set_open(i, true);
                 }
             }
