@@ -254,12 +254,15 @@ const MENU_PORTABLE: u32 = 8;
 const MENU_UPDATE: u32 = 9;
 const MENU_NOT_NOW: u32 = 10;
 const MENU_SMOOTH: u32 = 11;
+/// The screens' switches: this plus the screen's index in `App::screens`.
+const MENU_SCREEN: u32 = 100;
 const MENU_CLASS: PCWSTR = w!("IslandMenu");
 
 /// The menu window, while it is open.
 struct MenuWindow {
     hwnd: HWND,
-    target: render::MenuTarget,
+    /// `None` only for a moment, while it moves to another island.
+    target: Option<render::MenuTarget>,
     /// The island whose renderer made `target`: only that one draws it.
     owner: HWND,
     /// Its screen's scale, and its size in px.
@@ -544,6 +547,8 @@ struct App {
     anchor: HWND,
     /// One island per chosen screen ([`monitor::pick_all`]).
     surfaces: Vec<Surface>,
+    /// The connected screens and their ids, as the last layout found them.
+    screens: Vec<(Monitor, String)>,
     placement: Placement,
     monitor: MonitorChoice,
     media: media::Media,
@@ -721,6 +726,8 @@ fn monitors() -> Vec<(HMONITOR, Monitor, String)> {
             LPARAM(&mut list as *mut _ as isize),
         );
     }
+    #[cfg(feature = "qa")]
+    list.extend(qa::fake_monitors());
     list
 }
 
@@ -746,6 +753,11 @@ impl App {
         #[cfg(feature = "qa")]
         qa::layout_ran();
         let list = monitors();
+        // A screen plugged in or out: the menu's rows no longer fit it.
+        if list.len() != self.screens.len() && !self.screens.is_empty() {
+            self.close_menu();
+        }
+        self.screens = list.iter().map(|m| (m.1, m.2.clone())).collect();
         let mons: Vec<Monitor> = list.iter().map(|m| m.1).collect();
         let ids: Vec<&str> = list.iter().map(|m| m.2.as_str()).collect();
         let mut want: Vec<(HMONITOR, Monitor, String)> =
@@ -806,11 +818,25 @@ impl App {
             }
         }
         self.surfaces = surfaces;
-        // The menu draws with its island's renderer: gone with it.
-        if let Some(m) = &self.menu
+        // The menu draws with its island's renderer. That island gone (its
+        // screen's switch just turned off, say), another one draws it.
+        if let Some(m) = &mut self.menu
             && !self.surfaces.iter().any(|s| s.hwnd == m.owner)
         {
-            self.close_menu();
+            // A window takes one target at a time: the old one goes first.
+            m.target = None;
+            let moved = self.surfaces.iter().find_map(|s| {
+                let r = s.renderer.as_ref()?;
+                Some((s.hwnd, r.menu_target(m.hwnd).ok()?))
+            });
+            match moved {
+                Some((owner, target)) => {
+                    m.owner = owner;
+                    m.target = Some(target);
+                    self.draw_menu();
+                }
+                None => self.close_menu(),
+            }
         }
         // New islands too take the song's alignment.
         let align = self.settings.text_align;
@@ -2250,9 +2276,9 @@ impl App {
     /// The menu's entries and what each does.
     fn menu_rows(&self, startup_on: bool) -> Vec<(u32, render::MenuRow<'static>)> {
         let t = self.texts;
-        let row = |kind, label, on, enabled| render::MenuRow {
+        let row = |kind, label: &'static str, on, enabled| render::MenuRow {
             kind,
-            label,
+            label: label.into(),
             on,
             enabled,
         };
@@ -2320,6 +2346,41 @@ impl App {
         ];
         if self.settings.update_check {
             rows.insert(7, update);
+        }
+        // With two screens or more, a switch for each: an island there or
+        // not. The last island stays.
+        if self.screens.len() >= 2 {
+            let mons: Vec<Monitor> = self.screens.iter().map(|s| s.0).collect();
+            let ids: Vec<&str> = self.screens.iter().map(|s| s.1.as_str()).collect();
+            let on = monitor::pick_all(&mons, &ids, &self.monitor);
+            let at = rows
+                .iter()
+                .position(|r| r.1.kind == line)
+                .unwrap_or(rows.len());
+            let mut section = vec![(0, row(line, "", false, false))];
+            for (n, j) in monitor::order(&mons).into_iter().enumerate() {
+                let m = mons[j];
+                let mut label = format!(
+                    "{} · {}×{}",
+                    texts::fill(t.display_n, &[n as u32 + 1]),
+                    m.rect.width,
+                    m.rect.height
+                );
+                if m.primary {
+                    label = format!("{label} · {}", t.main_display);
+                }
+                let has = on.contains(&j);
+                section.push((
+                    MENU_SCREEN + j as u32,
+                    render::MenuRow {
+                        kind: toggle,
+                        label: label.into(),
+                        on: has,
+                        enabled: !(has && on.len() == 1),
+                    },
+                ));
+            }
+            rows.splice(at..at, section);
         }
         rows
     }
@@ -2413,7 +2474,7 @@ impl App {
             };
             self.menu = Some(MenuWindow {
                 hwnd,
-                target,
+                target: Some(target),
                 owner,
                 scale: k,
                 size: (size.0 as u32, size.1 as u32),
@@ -2431,7 +2492,9 @@ impl App {
                 .and_then(|s| s.renderer.as_ref());
             if let (true, Some(r), Some(m)) = (animations_on(), r, &self.menu) {
                 // It rises from below as Windows' own flyouts do.
-                let _ = r.menu_appear(&m.target, 6.0 * k);
+                if let Some(t) = &m.target {
+                    let _ = r.menu_appear(t, 6.0 * k);
+                }
             }
             let _ = ShowWindow(hwnd, SW_SHOW);
             // Focused, so a click anywhere else (it loses the focus) or Esc
@@ -2531,7 +2594,9 @@ impl App {
                 (i, if on { e } else { 1.0 - e })
             }),
         };
-        let _ = r.draw_menu(&mut m.target, &view);
+        if let Some(t) = &mut m.target {
+            let _ = r.draw_menu(t, &view);
+        }
     }
 
     /// Entry `i` of the menu chosen: a switch flips (its knob gliding) and
@@ -2735,6 +2800,22 @@ impl App {
             }
             MENU_NOT_NOW => {
                 self.offer_from = None;
+                return;
+            }
+            // An island on that screen, or not: kept by the screen's id.
+            _ if id >= MENU_SCREEN => {
+                let i = (id - MENU_SCREEN) as usize;
+                let mons: Vec<Monitor> = self.screens.iter().map(|s| s.0).collect();
+                let ids: Vec<&str> = self.screens.iter().map(|s| s.1.as_str()).collect();
+                file.monitor = monitor::toggle(&mons, &ids, &self.monitor, i);
+                // The command line no longer holds it.
+                self.args.monitor = None;
+                // A QA run never writes the real file.
+                if !qa_mode() {
+                    let value = island_core::settings::monitor_value(&file.monitor);
+                    let _ = settings_file::set("monitor", value);
+                }
+                self.apply(file);
                 return;
             }
             // The installed copy updates itself; any other only hears of it.
@@ -3048,6 +3129,7 @@ fn main() -> Result<()> {
         let app = App {
             anchor,
             surfaces: Vec::new(),
+            screens: Vec::new(),
             placement: defaults.placement,
             monitor: defaults.monitor.clone(),
             // In QA the script makes up the songs: the real ones go nowhere.

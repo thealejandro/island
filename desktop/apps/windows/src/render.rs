@@ -394,7 +394,7 @@ struct MenuFonts {
 /// One entry of the menu, as drawn.
 pub struct MenuRow<'a> {
     pub kind: menu::Kind,
-    pub label: &'a str,
+    pub label: std::borrow::Cow<'a, str>,
     pub on: bool,
     pub enabled: bool,
 }
@@ -2454,7 +2454,7 @@ impl Renderer {
                 width: switch.map_or(r.x + r.width - s.text_x, |_| s.label_width(r)),
                 height: r.height,
             };
-            self.text(row.label, &fonts.row, label, a);
+            self.text(&row.label, &fonts.row, label, a);
             if let Some(sw) = switch {
                 let radius = sw.height / 2.0;
                 let t = match m.knob {

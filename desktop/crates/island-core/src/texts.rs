@@ -12,6 +12,10 @@ pub struct Texts {
     /// Windows' banners off: notifications only in the island.
     pub only_island: &'static str,
     pub smooth_shape: &'static str,
+    /// A screen in the menu, by its number (left to right).
+    pub display_n: &'static str,
+    /// Beside the screen that is Windows' main one.
+    pub main_display: &'static str,
     pub start_with_windows: &'static str,
     pub open_settings: &'static str,
     pub quit: &'static str,
@@ -79,6 +83,8 @@ pub const EN: Texts = Texts {
     open_lyrics: "Lyrics in the open island",
     only_island: "Notifications only in the island",
     smooth_shape: "Smooth corners",
+    display_n: "Display {}",
+    main_display: "main",
     start_with_windows: "Start with Windows",
     open_settings: "Open settings",
     quit: "Quit",
@@ -130,6 +136,8 @@ pub const ES: Texts = Texts {
     open_lyrics: "Letra en la isla abierta",
     only_island: "Notificaciones solo en la isla",
     smooth_shape: "Esquinas suaves",
+    display_n: "Pantalla {}",
+    main_display: "principal",
     start_with_windows: "Iniciar con Windows",
     open_settings: "Abrir ajustes",
     quit: "Salir",
@@ -220,6 +228,7 @@ mod tests {
             assert_eq!(t.round.matches("{}").count(), 2);
             assert_eq!(t.then_break.matches("{}").count(), 1);
             assert_eq!(t.take_break.matches("{}").count(), 1);
+            assert_eq!(t.display_n.matches("{}").count(), 1);
         }
     }
 
@@ -233,6 +242,8 @@ mod tests {
                 t.open_lyrics,
                 t.only_island,
                 t.smooth_shape,
+                t.display_n,
+                t.main_display,
                 t.start_with_windows,
                 t.open_settings,
                 t.quit,
