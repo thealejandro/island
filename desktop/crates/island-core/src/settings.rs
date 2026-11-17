@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 use crate::color;
 use crate::focus::Lengths;
 use crate::media::{self, SongText, TextAlign};
-use crate::monitor::MonitorChoice;
+use crate::monitor::{MonitorChoice, Pick};
 use crate::pages::Page;
 use crate::shape::{Placement, Style};
 
@@ -250,19 +250,24 @@ impl Settings {
             shape: text("shape").and_then(Style::parse).unwrap_or(d.shape),
             // A screen's number may come as a number or as text; "all" or
             // a list ([1, 3] in JSON, "1,3" as text) puts an island on each.
+            // A list may name screens by their device id too.
             monitor: match o.get("monitor") {
                 Some(Value::String(s)) => MonitorChoice::parse(s),
                 Some(Value::Number(n)) => MonitorChoice::parse(&n.to_string()),
                 Some(Value::Array(a)) => {
-                    let ns: Option<Vec<usize>> = a
+                    let ps: Option<Vec<Pick>> = a
                         .iter()
-                        .map(|v| {
-                            v.as_u64()
+                        .map(|v| match v {
+                            Value::Number(n) => n
+                                .as_u64()
                                 .and_then(|n| usize::try_from(n).ok())
                                 .filter(|n| *n >= 1)
+                                .map(Pick::Number),
+                            Value::String(s) => Pick::parse(s),
+                            _ => None,
                         })
                         .collect();
-                    ns.filter(|ns| !ns.is_empty()).map(MonitorChoice::List)
+                    ps.filter(|ps| !ps.is_empty()).map(MonitorChoice::List)
                 }
                 _ => None,
             }
@@ -513,15 +518,23 @@ mod tests {
         // A list: an array in JSON, comma-separated as text.
         assert_eq!(
             parse(r#"{"monitor": [1, 3]}"#).monitor,
-            MonitorChoice::List(vec![1, 3])
+            MonitorChoice::List(vec![Pick::Number(1), Pick::Number(3)])
         );
         assert_eq!(
             parse(r#"{"monitor": "1,3"}"#).monitor,
-            MonitorChoice::List(vec![1, 3])
+            MonitorChoice::List(vec![Pick::Number(1), Pick::Number(3)])
         );
         assert_eq!(
             parse(r#"{"monitor": "2, 1"}"#).monitor,
-            MonitorChoice::List(vec![2, 1])
+            MonitorChoice::List(vec![Pick::Number(2), Pick::Number(1)])
+        );
+        // Screens by their device id, mixed with numbers.
+        assert_eq!(
+            parse(r#"{"monitor": ["\\\\?\\DISPLAY#DEL41B8#5&1", 2]}"#).monitor,
+            MonitorChoice::List(vec![
+                Pick::Id("\\\\?\\DISPLAY#DEL41B8#5&1".into()),
+                Pick::Number(2)
+            ])
         );
         // A bad value is the default alone.
         for bad in [
@@ -533,7 +546,8 @@ mod tests {
             "1.5",
             "[]",
             "[0]",
-            r#"[1, "a"]"#,
+            r#"[1, ""]"#,
+            "[1, true]",
             "true",
         ] {
             let s = parse(&format!(r#"{{"monitor": {bad}}}"#));

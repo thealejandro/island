@@ -594,6 +594,39 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
             let max = arg_f(cmd, 2).unwrap_or(60.0) as u32;
             QA.with_borrow_mut(|q| q.as_mut().map(|q| q.film = Some((name, 0, max))));
         }
+        // As if the screens changed: each island told twice, as Windows does
+        // with WM_DISPLAYCHANGE and WM_DPICHANGED.
+        "display-change" => {
+            for sf in &app.surfaces {
+                unsafe {
+                    for msg in [WM_DISPLAYCHANGE, WM_DPICHANGED] {
+                        let _ = PostMessageW(Some(sf.hwnd), msg, WPARAM(0), LPARAM(0));
+                    }
+                }
+            }
+        }
+        // The islands' screens, and the layouts run so far, for the report.
+        "monitors" => {
+            let runs = LAYOUTS.get();
+            note(&format!("layouts: {runs}"));
+            for (i, sf) in app.surfaces.iter().enumerate() {
+                let (r, w) = (sf.monitor.rect, sf.monitor.work);
+                note(&format!(
+                    "isla {i}: id «{}», pantalla {}x{} en ({}, {}), trabajo {}x{} en ({}, {}), ventana en ({}, {})",
+                    sf.id,
+                    r.width,
+                    r.height,
+                    r.x,
+                    r.y,
+                    w.width,
+                    w.height,
+                    w.x,
+                    w.y,
+                    sf.window.x,
+                    sf.window.y
+                ));
+            }
+        }
         "quit" => {
             QA.with_borrow_mut(|q| q.as_mut().map(|q| q.next = q.cmds.len()));
         }
@@ -611,6 +644,17 @@ fn screen_free() -> bool {
         note("sin capturas: el protector de pantalla o el bloqueo tapa el escritorio");
     }
     shows
+}
+
+thread_local! {
+    /// How many layouts ran: the screens changing asks for one, not one
+    /// per island and message.
+    static LAYOUTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// A layout ran.
+pub fn layout_ran() {
+    LAYOUTS.set(LAYOUTS.get() + 1);
 }
 
 /// A note for the report, once.
