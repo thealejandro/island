@@ -25,6 +25,8 @@ mod volume;
 
 use std::cell::RefCell;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicBool, AtomicIsize};
 use std::time::Instant;
 
 use island_core::bluetooth::Event as BtEvent;
@@ -46,8 +48,9 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Globalization::{GetTimeFormatEx, GetUserDefaultLocaleName, TIME_NOSECONDS};
 use windows::Win32::Graphics::Gdi::{
-    CreateRectRgn, EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST,
-    MONITORINFO, MonitorFromPoint, ScreenToClient, SetWindowRgn,
+    CreateRectRgn, DISPLAY_DEVICEW, EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, HDC,
+    HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MONITORINFOEXW, MonitorFromPoint,
+    ScreenToClient, SetWindowRgn,
 };
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
@@ -68,13 +71,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     FindWindowExW, GetCursorPos, GetMessageW, GetWindowThreadProcessId, HWND_MESSAGE, HWND_TOPMOST,
     IDC_ARROW, IsWindow, KillTimer, LoadCursorW, MA_NOACTIVATE, MONITORINFOF_PRIMARY, MSG,
-    PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_SHOW, SW_SHOWNORMAL,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetTimer, SetWindowPos,
-    ShowWindow, TranslateMessage, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COPYDATA, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DWMCOLORIZATIONCOLORCHANGED, WM_ENDSESSION, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONUP,
-    WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SPI_SETWORKAREA,
+    SW_SHOW, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetTimer,
+    SetWindowPos, ShowWindow, TranslateMessage, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COPYDATA,
+    WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DWMCOLORIZATIONCOLORCHANGED, WM_ENDSESSION,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE,
+    WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 use windows::core::BOOL;
 use windows::core::{Error, HSTRING, PCWSTR, Result, w};
@@ -101,6 +104,25 @@ const PEEK_MS: u32 = 3500;
 /// Moves the lyrics to the next line, when it starts.
 const LYRIC_TIMER: usize = 5;
 const WM_APP_LAYOUT: u32 = WM_APP + 1;
+
+/// The anchor window, for what must reach the app while it is busy.
+static ANCHOR: AtomicIsize = AtomicIsize::new(0);
+/// A layout is asked for and not done yet: the screens changing sends each
+/// island the same messages, and one layout is enough for all.
+static LAYOUT_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// Asks for one layout, soon: screens added, removed, moved or rescaled,
+/// or the taskbar moved.
+fn ask_layout() {
+    if !LAYOUT_PENDING.swap(true, Relaxed) {
+        let anchor = HWND(ANCHOR.load(Relaxed) as *mut _);
+        unsafe {
+            if PostMessageW(Some(anchor), WM_APP_LAYOUT, WPARAM(0), LPARAM(0)).is_err() {
+                LAYOUT_PENDING.store(false, Relaxed);
+            }
+        }
+    }
+}
 /// The media thread has a new snapshot.
 const WM_APP_MEDIA: u32 = WM_APP + 2;
 /// The lyrics thread has an answer.
@@ -279,6 +301,9 @@ struct Surface {
     hwnd: HWND,
     /// The screen the window is on, to find it again on the next layout.
     mon: HMONITOR,
+    /// The screen's device id: its island stays the same one when Windows
+    /// renumbers the screens. Empty if Windows doesn't tell.
+    id: String,
     monitor: Monitor,
     scale: f32,
     /// The window on screen, in px: sized for the open island.
@@ -312,7 +337,7 @@ struct Surface {
 
 impl Surface {
     /// A window on `monitor`, its renderer and its frame pacer.
-    fn new(mon: HMONITOR, monitor: Monitor, scale: f32) -> Option<Self> {
+    fn new(mon: HMONITOR, id: String, monitor: Monitor, scale: f32) -> Option<Self> {
         let hwnd = unsafe {
             CreateWindowExW(
                 WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP,
@@ -333,6 +358,7 @@ impl Surface {
         Some(Self {
             hwnd,
             mon,
+            id,
             monitor,
             scale,
             window: Rect::default(),
@@ -367,9 +393,16 @@ impl Surface {
         self.open_width = layout::fit_open_width(open_width_setting, screen);
         self.peek_most = layout::fit_open_width(layout::PEEK_MOST, screen);
         let s = self.scale;
+        // Hanging from the edge, like a notch, it goes on the screen's
+        // edge; otherwise clear of a taskbar on top.
+        let area = if placement.hangs() {
+            self.monitor.rect
+        } else {
+            self.monitor.work
+        };
         let r = shape::window_rect(
             placement,
-            self.monitor.rect,
+            area,
             (self.widest(k) + 2.0 * spring::ROOM_WIDTH) * s,
             (OPEN.1 + spring::ROOM_HEIGHT) * s,
             EAR * s,
@@ -623,34 +656,63 @@ unsafe extern "system" fn collect_monitor(
     _: *mut RECT,
     out: LPARAM,
 ) -> BOOL {
-    let mut mi = MONITORINFO {
-        cbSize: size_of::<MONITORINFO>() as u32,
+    let mut mi = MONITORINFOEXW {
+        monitorInfo: MONITORINFO {
+            cbSize: size_of::<MONITORINFOEXW>() as u32,
+            ..Default::default()
+        },
         ..Default::default()
     };
     // SAFETY: `out` is the &mut Vec that `monitors` passes, alive for the call.
-    let list = unsafe { &mut *(out.0 as *mut Vec<(HMONITOR, Monitor)>) };
-    if unsafe { GetMonitorInfoW(mon, &mut mi) }.as_bool() {
-        let r = mi.rcMonitor;
-        let rect = Rect {
+    let list = unsafe { &mut *(out.0 as *mut Vec<(HMONITOR, Monitor, String)>) };
+    // SAFETY: a MONITORINFOEXW starts with its MONITORINFO, and cbSize says
+    // which one it is.
+    if unsafe { GetMonitorInfoW(mon, &mut mi.monitorInfo) }.as_bool() {
+        let px = |r: RECT| Rect {
             x: r.left as f32,
             y: r.top as f32,
             width: (r.right - r.left) as f32,
             height: (r.bottom - r.top) as f32,
         };
+        let info = mi.monitorInfo;
         list.push((
             mon,
             Monitor {
-                rect,
-                primary: mi.dwFlags & MONITORINFOF_PRIMARY != 0,
+                rect: px(info.rcMonitor),
+                work: px(info.rcWork),
+                primary: info.dwFlags & MONITORINFOF_PRIMARY != 0,
             },
+            device_id(&mi.szDevice),
         ));
     }
     true.into()
 }
 
-/// The connected screens, as Windows lists them now.
-fn monitors() -> Vec<(HMONITOR, Monitor)> {
-    let mut list: Vec<(HMONITOR, Monitor)> = Vec::new();
+/// The id of the screen on a display adapter's output (`\\.\DISPLAY1`):
+/// the same each time it is plugged into the same port, wherever it sits
+/// and whatever number Windows gives it. Empty if Windows doesn't tell.
+fn device_id(device: &[u16; 32]) -> String {
+    // EDD_GET_DEVICE_INTERFACE_NAME: the device's path, not its name.
+    const INTERFACE_NAME: u32 = 1;
+    let mut dd = DISPLAY_DEVICEW {
+        cb: size_of::<DISPLAY_DEVICEW>() as u32,
+        ..Default::default()
+    };
+    let ok = unsafe { EnumDisplayDevicesW(PCWSTR(device.as_ptr()), 0, &mut dd, INTERFACE_NAME) };
+    if !ok.as_bool() {
+        return String::new();
+    }
+    let end = dd
+        .DeviceID
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(dd.DeviceID.len());
+    String::from_utf16_lossy(&dd.DeviceID[..end])
+}
+
+/// The connected screens, as Windows lists them now, with their ids.
+fn monitors() -> Vec<(HMONITOR, Monitor, String)> {
+    let mut list: Vec<(HMONITOR, Monitor, String)> = Vec::new();
     unsafe {
         let _ = EnumDisplayMonitors(
             None,
@@ -681,41 +743,58 @@ impl App {
     /// Runs again when screens are added, removed, moved or rescaled, and
     /// when the `monitor` setting changes.
     fn layout(&mut self) {
+        #[cfg(feature = "qa")]
+        qa::layout_ran();
         let list = monitors();
         let mons: Vec<Monitor> = list.iter().map(|m| m.1).collect();
-        let mut want: Vec<(HMONITOR, Monitor)> = monitor::pick_all(&mons, &self.monitor)
-            .iter()
-            .map(|&i| list[i])
-            .collect();
+        let ids: Vec<&str> = list.iter().map(|m| m.2.as_str()).collect();
+        let mut want: Vec<(HMONITOR, Monitor, String)> =
+            monitor::pick_all(&mons, &ids, &self.monitor)
+                .iter()
+                .map(|&i| list[i].clone())
+                .collect();
         if want.is_empty() {
             // No screens at all: a made-up one, so the app keeps a window.
+            let rect = Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            };
             want.push((
                 HMONITOR::default(),
                 Monitor {
-                    rect: Rect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: 1920.0,
-                        height: 1080.0,
-                    },
+                    rect,
+                    work: rect,
                     primary: true,
                 },
+                String::new(),
             ));
         }
         let mut old = std::mem::take(&mut self.surfaces);
         // A window destroyed behind the app's back is made anew.
         old.retain(|s| unsafe { IsWindow(Some(s.hwnd)) }.as_bool());
         let mut surfaces = Vec::with_capacity(want.len());
-        for (mon, m) in want {
+        for (mon, m, id) in want {
             let scale = monitor_scale(mon);
-            let sf = match old.iter().position(|s| s.mon == mon) {
+            // Its island is the one on the screen with its id; without an
+            // id, the one on the same HMONITOR.
+            let same = |s: &Surface| {
+                if id.is_empty() || s.id.is_empty() {
+                    s.mon == mon
+                } else {
+                    s.id == id
+                }
+            };
+            let sf = match old.iter().position(same) {
                 Some(pos) => {
                     let mut sf = old.remove(pos);
+                    sf.mon = mon;
                     sf.monitor = m;
                     sf.scale = scale;
                     Some(sf)
                 }
-                None => Surface::new(mon, m, scale),
+                None => Surface::new(mon, id.clone(), m, scale),
             };
             if let Some(sf) = sf {
                 surfaces.push(sf);
@@ -1916,6 +1995,10 @@ impl App {
     fn anchor_message(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
         match msg {
             WM_APP_MEDIA => self.media_update(),
+            WM_APP_LAYOUT => {
+                LAYOUT_PENDING.store(false, Relaxed);
+                self.layout();
+            }
             WM_APP_LYRICS => self.lyrics_answer(),
             WM_APP_VOLUME if self.volume.is_some() => {
                 self.volume_changed(volume::read(wp, lp));
@@ -2053,10 +2136,10 @@ impl App {
         qa::surface_msg(msg, wp.0);
         let Some(i) = self.surfaces.iter().position(|s| s.hwnd == hwnd) else {
             return match msg {
-                WM_DPICHANGED | WM_DISPLAYCHANGE => unsafe {
-                    let _ = PostMessageW(Some(hwnd), WM_APP_LAYOUT, WPARAM(0), LPARAM(0));
+                WM_DPICHANGED | WM_DISPLAYCHANGE => {
+                    ask_layout();
                     Some(LRESULT(0))
-                },
+                }
                 _ => None,
             };
         };
@@ -2127,10 +2210,17 @@ impl App {
                 let hot = self.hot_at(i, x, y);
                 self.set_hot(i, hot, false);
             }
-            WM_DPICHANGED | WM_DISPLAYCHANGE | WM_APP_LAYOUT => self.layout(),
+            WM_DPICHANGED | WM_DISPLAYCHANGE => ask_layout(),
             // Clicking the island never takes the focus from the app in use.
             WM_MOUSEACTIVATE => return Some(LRESULT(MA_NOACTIVATE as isize)),
-            WM_SETTINGCHANGE | WM_DWMCOLORIZATIONCOLORCHANGED => self.colors_changed(),
+            WM_SETTINGCHANGE => {
+                // The taskbar moved or changed size: so did the work area.
+                if wp.0 == SPI_SETWORKAREA.0 as usize {
+                    ask_layout();
+                }
+                self.colors_changed();
+            }
+            WM_DWMCOLORIZATIONCOLORCHANGED => self.colors_changed(),
             // Asked to close (the anchor, message-only, never is): the app
             // ends.
             WM_CLOSE => self.quit(),
@@ -2714,10 +2804,14 @@ extern "system" fn island_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         // A message sent from inside a handler (SetWindowPos, DestroyWindow):
         // the app is busy, so what needs it waits for the queue.
         Err(_) => match msg {
-            WM_DPICHANGED | WM_DISPLAYCHANGE => unsafe {
-                let _ = PostMessageW(Some(hwnd), WM_APP_LAYOUT, WPARAM(0), LPARAM(0));
+            WM_DPICHANGED | WM_DISPLAYCHANGE => {
+                ask_layout();
                 Some(LRESULT(0))
-            },
+            }
+            WM_SETTINGCHANGE if wp.0 == SPI_SETWORKAREA.0 as usize => {
+                ask_layout();
+                None
+            }
             _ => None,
         },
     });
@@ -2947,6 +3041,7 @@ fn main() -> Result<()> {
             Some(instance.into()),
             None,
         )?;
+        ANCHOR.store(anchor.0 as isize, Relaxed);
         let defaults = Settings::default();
         let locale = locale();
         let texts = texts::texts(defaults.language, &locale);
