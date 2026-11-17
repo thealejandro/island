@@ -41,8 +41,8 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
 };
 use windows::Win32::Graphics::DirectComposition::{
-    DCompositionCreateDevice, IDCompositionDevice, IDCompositionSurface, IDCompositionTarget,
-    IDCompositionVisual,
+    DCompositionCreateDevice, IDCompositionAnimation, IDCompositionDevice, IDCompositionSurface,
+    IDCompositionTarget, IDCompositionVisual,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_FEATURE, DWRITE_FONT_FEATURE_TAG_TABULAR_FIGURES,
@@ -410,6 +410,8 @@ pub struct MenuView<'a> {
     pub rows: &'a [MenuRow<'a>],
     pub hover: Option<usize>,
     pub look: menu::Look,
+    /// A switch on its way: its row, and how far on it is now (0 to 1).
+    pub knob: Option<(usize, f32)>,
 }
 
 /// The menu window's own composition target; drawn with the island's
@@ -490,13 +492,20 @@ fn v(p: Point) -> Vector2 {
     Vector2 { X: p.x, Y: p.y }
 }
 
-/// The menu's panel.
-const MENU_PANEL: D2D1_COLOR_F = D2D1_COLOR_F {
-    r: 0.11,
-    g: 0.11,
-    b: 0.12,
-    a: 1.0,
-};
+/// The menu's panel: a dark grey like the system's flyouts, or with a
+/// theme's color for the island, that color a little lighter.
+fn menu_panel() -> [f32; 3] {
+    let body = body_color();
+    if body == [0.0; 3] {
+        [0.11, 0.11, 0.12]
+    } else {
+        body.map(|c| c + (1.0 - c) * 0.08)
+    }
+}
+
+fn rgba([r, g, b]: [f32; 3], a: f32) -> D2D1_COLOR_F {
+    D2D1_COLOR_F { r, g, b, a }
+}
 
 // The ink's opacity, by role, so each kind of thing reads the same
 // everywhere: what matters, the line under it, what's quiet, what can't be
@@ -2299,6 +2308,36 @@ impl Renderer {
         }
     }
 
+    /// The menu fades in rising `rise` px into place (140 ms), animated by
+    /// DWM itself: no frames of ours.
+    pub fn menu_appear(&self, t: &MenuTarget, rise: f32) -> Result<()> {
+        const D: f64 = 0.14;
+        // Ease out (cubic) from `a` to `b`: a + Δ(3u - 3u² + u³), u = s / D.
+        let eased = |a: f32, b: f32| -> Result<IDCompositionAnimation> {
+            let d = b - a;
+            let span = D as f32;
+            unsafe {
+                let anim = self.dcomp.CreateAnimation()?;
+                anim.AddCubic(
+                    0.0,
+                    a,
+                    3.0 * d / span,
+                    -3.0 * d / (span * span),
+                    d / (span * span * span),
+                )?;
+                anim.End(D, b)?;
+                Ok(anim)
+            }
+        };
+        unsafe {
+            let group = self.dcomp.CreateEffectGroup()?;
+            group.SetOpacity(&eased(0.0, 1.0)?)?;
+            t.visual.SetEffect(&group)?;
+            t.visual.SetOffsetY(&eased(rise, 0.0)?)?;
+            self.dcomp.Commit()
+        }
+    }
+
     /// The whole menu, every time: it is small and drawn only on a change.
     pub fn draw_menu(&mut self, t: &mut MenuTarget, m: &MenuView) -> Result<()> {
         let (w, h) = (m.width.max(1), m.height.max(1));
@@ -2373,15 +2412,17 @@ impl Renderer {
             radiusX: s.radius,
             radiusY: s.radius,
         };
+        let back = menu_panel();
         unsafe {
-            // A dark grey, softer than the island's black, like the
-            // system's own flyouts; a light rim keeps its edge.
-            self.ink.SetColor(&MENU_PANEL);
+            // Softer than the island's black, like the system's own
+            // flyouts; a faint rim keeps its edge, as theirs.
+            self.ink.SetColor(&rgba(back, 1.0));
             self.dc.FillRoundedRectangle(&panel, &self.ink);
-            self.ink.SetColor(&white(0.3));
+            self.ink.SetColor(&white(0.10));
             self.dc
                 .DrawRoundedRectangle(&panel, &self.ink, 1.0 / m.scale, None);
         }
+        let accent = windows_accent();
         let head = Rect {
             x: s.text_x,
             y: s.pad,
@@ -2399,12 +2440,12 @@ impl Renderer {
                     width: w - 2.0 * (s.text_x - 2.0),
                     height: 1.0 / m.scale,
                 };
-                self.rounded(line, 0.0, 0.2);
+                self.rounded(line, 0.0, 0.12);
                 continue;
             }
             let a = if row.enabled { 1.0 } else { 0.4 };
             if m.hover == Some(i) && row.enabled {
-                self.rounded(r, s.row_radius, 0.15);
+                self.rounded(r, s.row_radius, 0.08);
             }
             let switch = (row.kind == menu::Kind::Toggle).then(|| s.switch(r));
             let label = Rect {
@@ -2416,20 +2457,35 @@ impl Renderer {
             self.text(row.label, &fonts.row, label, a);
             if let Some(sw) = switch {
                 let radius = sw.height / 2.0;
-                let knob = s.knob(sw, if row.on { 1.0 } else { 0.0 });
-                if row.on {
-                    // On: a white track, the knob in the panel's grey.
-                    self.rounded(sw, radius, a);
-                    unsafe {
-                        self.ink.SetColor(&MENU_PANEL);
-                        self.dc.FillEllipse(&ellipse(knob), &self.ink);
-                    }
-                } else {
-                    self.rounded(sw, radius, 0.3 * a);
-                    unsafe {
-                        self.ink.SetColor(&white(0.85 * a));
-                        self.dc.FillEllipse(&ellipse(knob), &self.ink);
-                    }
+                let t = match m.knob {
+                    Some((k, t)) if k == i => t,
+                    _ if row.on => 1.0,
+                    _ => 0.0,
+                };
+                let knob = s.knob(sw, t);
+                // As Windows' own: off, an outline with a light knob; on,
+                // filled in the accent with a knob that reads on it.
+                let ring = D2D1_ROUNDED_RECT {
+                    rect: rf(Rect {
+                        x: sw.x + 0.5,
+                        y: sw.y + 0.5,
+                        width: sw.width - 1.0,
+                        height: sw.height - 1.0,
+                    }),
+                    radiusX: radius - 0.5,
+                    radiusY: radius - 0.5,
+                };
+                let on_ink = color::ink_on(accent);
+                let mix = |x: f32, y: f32| x + (y - x) * t;
+                let knob_ink = [0, 1, 2].map(|c| mix(1.0, on_ink[c]));
+                unsafe {
+                    self.ink.SetColor(&white(0.6 * a * (1.0 - t)));
+                    self.dc.DrawRoundedRectangle(&ring, &self.ink, 1.0, None);
+                }
+                self.tinted_rounded(sw, radius, accent, a * t);
+                unsafe {
+                    self.ink.SetColor(&rgba(knob_ink, mix(0.8, 1.0) * a));
+                    self.dc.FillEllipse(&ellipse(knob), &self.ink);
                 }
             }
         }

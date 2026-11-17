@@ -40,7 +40,9 @@ use windows::Win32::Graphics::Imaging::{
     IWICImagingFactory, WICBitmapEncoderNoCache,
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
-use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, SW_SHOWNOACTIVATE, ShowWindow};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetWindowRect, SW_HIDE, SW_SHOWNOACTIVATE, ShowWindow,
+};
 use windows::core::GUID;
 
 /// The anchor's timer that runs the script.
@@ -546,6 +548,45 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
             }
             for i in 0..app.surfaces.len() {
                 shoot(app, i, &format!("{name}-{i}"));
+            }
+        }
+        // The menu, centered as when the exe is opened again (not focused).
+        "menu" => app.open_menu(true),
+        "menu-key" => {
+            let vk = match text(cmd, 1).as_str() {
+                "up" => VK_UP,
+                "down" => VK_DOWN,
+                "enter" => VK_RETURN,
+                _ => return Err("«menu-key»: up, down o enter".into()),
+            };
+            let _ = app.menu_message(WM_KEYDOWN, WPARAM(vk.0 as usize), LPARAM(0));
+        }
+        "grab-menu" => {
+            let name = cmd.get(1).ok_or("«grab-menu» pide un nombre")?.clone();
+            let Some(hwnd) = app.menu.as_ref().map(|m| m.hwnd) else {
+                return Err("«grab-menu»: el menú no está abierto".into());
+            };
+            let mut r = RECT::default();
+            unsafe {
+                let _ = DwmFlush();
+                let _ = GetWindowRect(hwnd, &mut r);
+            }
+            let at = Rect {
+                x: r.left as f32,
+                y: r.top as f32,
+                width: (r.right - r.left) as f32,
+                height: (r.bottom - r.top) as f32,
+            };
+            if screen_free()
+                && let Some(g) = grab(at)
+            {
+                QA.with_borrow_mut(|q| {
+                    if let Some(q) = q.as_mut()
+                        && let Err(e) = save_png(&g, &q.out.join(format!("{name}.png")))
+                    {
+                        q.notes.push(format!("{name}: no se pudo guardar ({e})"));
+                    }
+                });
             }
         }
         "film" => {
