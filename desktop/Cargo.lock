@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "island-core"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "regex-lite",
  "serde_json",
@@ -101,7 +101,7 @@ dependencies = [
 
 [[package]]
 name = "island-macos"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "island-core",
  "objc2",
@@ -111,7 +111,7 @@ dependencies = [
 
 [[package]]
 name = "island-windows"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "embed-resource",
  "island-core",
