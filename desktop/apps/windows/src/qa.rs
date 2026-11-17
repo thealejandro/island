@@ -642,6 +642,24 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
         }
         // As if the screens changed: each island told twice, as Windows does
         // with WM_DISPLAYCHANGE and WM_DPICHANGED.
+        // Explorer's word that an app went full screen on island j's screen
+        // (1) or left it (0), as if checked; no full-screen app needed.
+        "full-screen" => {
+            let j = arg_f(cmd, 1)? as usize;
+            let on = arg_f(cmd, 2)? != 0.0;
+            if j >= app.surfaces.len() {
+                return Err(format!("«full-screen»: no hay isla {j}"));
+            }
+            app.full_screen(j, on);
+            let shown = unsafe {
+                windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(app.surfaces[j].hwnd)
+            }
+            .as_bool();
+            note(&format!(
+                "isla {j}: {}",
+                if shown { "visible" } else { "oculta" }
+            ));
+        }
         "display-change" => {
             for sf in &app.surfaces {
                 unsafe {

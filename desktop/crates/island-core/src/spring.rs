@@ -48,6 +48,16 @@ pub const GLANCE: Params = Params {
     epsilon: 0.25,
 };
 
+/// Animations off: critically damped (ζ = 1 is a damping of
+/// 2·√(spring·mass·0.016), stepped as below; 0.70 here), so it goes
+/// straight there without an overshoot either way.
+pub const STILL: Params = Params {
+    spring: 7.7,
+    damping: 0.71,
+    mass: 1.0,
+    epsilon: 0.25,
+};
+
 /// Room the window keeps around the open body for its wobble, in DIPs: on
 /// each side, and below. The widest open (960) overshoots by under 5 a side;
 /// the tallest by under 8.
@@ -210,6 +220,26 @@ mod tests {
                 low = low.min(s.value);
             }
             assert!(low >= to - 0.01, "{from} to {to}: low {low}");
+        }
+    }
+
+    #[test]
+    fn still_never_overshoots_and_is_quick() {
+        for (from, to) in [
+            (32.0, OPEN_H),
+            (OPEN_H, 32.0),
+            (180.0, 960.0),
+            (960.0, 180.0),
+        ] {
+            let mut s = Spring::at(from);
+            s.target = to;
+            let (lo, hi) = (f32::min(from, to) - 0.01, f32::max(from, to) + 0.01);
+            let mut frames = 0;
+            while s.advance(&STILL, 16.7) {
+                frames += 1;
+                assert!((lo..=hi).contains(&s.value), "{from} to {to}: {}", s.value);
+            }
+            assert!(frames <= 40, "{from} to {to}: {frames} frames");
         }
     }
 

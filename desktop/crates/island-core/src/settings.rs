@@ -94,6 +94,37 @@ impl IslandColor {
     }
 }
 
+/// Whether the island moves with springs and flourishes, or goes straight
+/// to where it's headed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Animations {
+    /// As Windows' "Animation effects" (Accessibility › Visual effects).
+    #[default]
+    System,
+    On,
+    Off,
+}
+
+impl Animations {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "system" => Some(Self::System),
+            "on" => Some(Self::On),
+            "off" => Some(Self::Off),
+            _ => None,
+        }
+    }
+
+    /// On or off, given what Windows says for `System`.
+    pub fn on(self, system: bool) -> bool {
+        match self {
+            Self::System => system,
+            Self::On => true,
+            Self::Off => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     pub language: Language,
@@ -141,6 +172,9 @@ pub struct Settings {
     pub island_scale: f32,
     pub accent: Accent,
     pub island_color: IslandColor,
+    pub animations: Animations,
+    /// The island hides on a screen while an app is in full screen there.
+    pub hide_in_full_screen: bool,
 }
 
 /// `lyricsDelay`'s range, in ms.
@@ -177,6 +211,8 @@ impl Default for Settings {
             island_scale: 1.0,
             accent: Accent::System,
             island_color: IslandColor::Black,
+            animations: Animations::System,
+            hide_in_full_screen: true,
         }
     }
 }
@@ -197,6 +233,8 @@ pub const TEMPLATE: &str = r#"{
   "islandScale": 1.0,
   "accent": "system",
   "islandColor": "black",
+  "animations": "system",
+  "hideInFullScreen": true,
   "focusMinutes": 25,
   "breakMinutes": 5,
   "longBreakMinutes": 15,
@@ -321,6 +359,10 @@ impl Settings {
             island_color: text("islandColor")
                 .and_then(IslandColor::parse)
                 .unwrap_or(d.island_color),
+            animations: text("animations")
+                .and_then(Animations::parse)
+                .unwrap_or(d.animations),
+            hide_in_full_screen: flag("hideInFullScreen", d.hide_in_full_screen),
         })
     }
 
@@ -629,6 +671,28 @@ mod tests {
         assert_eq!(parse(r#"{"shape": "classic"}"#).shape, Style::Classic);
         assert_eq!(parse(r#"{"shape": "wavy"}"#).shape, Style::Smooth);
         assert_eq!(parse(TEMPLATE).shape, Style::Smooth);
+    }
+
+    #[test]
+    fn animations_and_full_screen() {
+        assert_eq!(parse(TEMPLATE).animations, Animations::System);
+        assert_eq!(
+            parse(r#"{"animations": "OFF"}"#).animations,
+            Animations::Off
+        );
+        assert_eq!(parse(r#"{"animations": "on"}"#).animations, Animations::On);
+        assert_eq!(
+            parse(r#"{"animations": false}"#).animations,
+            Animations::System
+        );
+        assert_eq!(
+            parse(r#"{"animations": "slow"}"#).animations,
+            Animations::System
+        );
+        assert!(Animations::System.on(true) && !Animations::System.on(false));
+        assert!(Animations::On.on(false) && !Animations::Off.on(true));
+        assert!(parse(TEMPLATE).hide_in_full_screen);
+        assert!(!parse(r#"{"hideInFullScreen": false}"#).hide_in_full_screen);
     }
 
     #[test]
