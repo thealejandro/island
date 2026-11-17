@@ -72,9 +72,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetTimer, SetWindowPos,
     ShowWindow, TranslateMessage, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COPYDATA, WM_DESTROY,
     WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DWMCOLORIZATIONCOLORCHANGED, WM_ENDSESSION, WM_KEYDOWN,
-    WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONUP, WM_SETTINGCHANGE,
-    WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONUP,
+    WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 use windows::core::BOOL;
 use windows::core::{Error, HSTRING, PCWSTR, Result, w};
@@ -143,7 +143,9 @@ const ISLAND_CLASS: PCWSTR = w!("IslandWindow");
 const ANCHOR_CLASS: PCWSTR = w!("IslandAnchor");
 
 /// How long the glance's content takes to change in place, in ms.
-const SWAP_MS: f32 = 300.0;
+const SWAP_MS: f32 = 260.0;
+/// How long the pages take to cross as the tabs change.
+const PAGE_MS: f32 = 180.0;
 
 /// What the glance showed before a change in place (see `render::Before`).
 #[derive(Clone)]
@@ -559,6 +561,11 @@ struct App {
     closed_w: f32,
     /// The open island's page: the one last chosen (while the app runs).
     page: Page,
+    /// The page just left, and when: the two cross as the tabs change.
+    page_from: Option<(Page, Instant)>,
+    /// What the pointer is over in the open island; the button is down.
+    hot: Option<render::Hot>,
+    pressed: bool,
     timer: focus::Timer,
     /// The steady clock the timer counts on.
     start: Instant,
@@ -861,11 +868,13 @@ impl App {
                     Before::Line(l) => render::Before::Line(l),
                     Before::Song => render::Before::Song,
                 },
-                t: {
-                    let x = (at.elapsed().as_secs_f32() * 1000.0 / SWAP_MS).min(1.0);
-                    1.0 - (1.0 - x).powi(3)
-                },
+                t: (at.elapsed().as_secs_f32() * 1000.0 / SWAP_MS).min(1.0),
             }),
+            page_from: self
+                .page_from
+                .map(|(p, at)| (p, (at.elapsed().as_secs_f32() * 1000.0 / PAGE_MS).min(1.0))),
+            hot: self.hot.filter(|_| sf.open && sf.tracking),
+            pressed: self.pressed,
             width: sf.window.width as u32,
             height: sf.window.height as u32,
             body,
@@ -1217,10 +1226,7 @@ impl App {
         }
         let (lx, ly) = self.surfaces[i].to_open(self.placement, x, y);
         if let Some(page) = pages::hit_tab(lx, ly) {
-            if page != self.page {
-                self.page = page;
-                self.redraw_all();
-            }
+            self.show_page(page);
             return;
         }
         // The page is laid out from its own top.
@@ -1255,6 +1261,63 @@ impl App {
                 self.arm_focus();
                 self.redraw_all();
             }
+        }
+    }
+
+    /// Changes the open island's page, the two crossing (closed islands
+    /// just show the new one when they open).
+    fn show_page(&mut self, page: Page) {
+        if page == self.page {
+            return;
+        }
+        self.page_from = Some((self.page, Instant::now()));
+        self.page = page;
+        for sf in self.surfaces.iter_mut().filter(|s| s.open) {
+            if sf.last_frame.is_none() {
+                sf.last_frame = Some(Instant::now());
+                sf.pacer.start();
+            }
+        }
+    }
+
+    /// What answers a click at (x, y) in island `i`'s window, if it's open.
+    fn hot_at(&self, i: usize, x: f32, y: f32) -> Option<render::Hot> {
+        let sf = &self.surfaces[i];
+        if !sf.open || !sf.height.is_settled() {
+            return None;
+        }
+        let (lx, ly) = sf.to_open(self.placement, x, y);
+        if let Some(page) = pages::hit_tab(lx, ly) {
+            return (page != self.page).then_some(render::Hot::Tab(page));
+        }
+        let py = ly - pages::PAGE_Y;
+        match self.page {
+            Page::Home => {
+                let t = self.track.as_ref()?;
+                let open =
+                    layout::Open::new(sf.open_width, self.lyrics_column && !self.lines.is_empty());
+                let b = layout::hit(lx, py, open)?;
+                let on = match b {
+                    layout::Button::Prev => t.can_prev,
+                    layout::Button::PlayPause => t.can_toggle,
+                    layout::Button::Next => t.can_next,
+                };
+                on.then_some(render::Hot::Media(b))
+            }
+            Page::Focus => pages::hit_focus(lx, py, sf.open_width).map(render::Hot::Focus),
+        }
+    }
+
+    /// The pointer moved, or the button went down or up: island `i` is
+    /// redrawn if what's lit changed (only then: no frames while it rests).
+    fn set_hot(&mut self, i: usize, hot: Option<render::Hot>, pressed: bool) {
+        let pressed = pressed && hot.is_some();
+        if (hot, pressed) == (self.hot, self.pressed) {
+            return;
+        }
+        (self.hot, self.pressed) = (hot, pressed);
+        if self.surfaces[i].last_frame.is_none() {
+            self.draw_surface(i);
         }
     }
 
@@ -1550,6 +1613,13 @@ impl App {
                 } else {
                     sf.swap = None;
                 }
+            }
+        }
+        if let Some((_, at)) = self.page_from {
+            if at.elapsed().as_secs_f32() * 1000.0 < PAGE_MS {
+                moving |= self.surfaces[i].open;
+            } else {
+                self.page_from = None;
             }
         }
         if let Some(at) = self.pulse {
@@ -1971,19 +2041,27 @@ impl App {
             };
         };
         match msg {
-            WM_MOUSEMOVE if !self.surfaces[i].tracking => {
-                let mut t = TRACKMOUSEEVENT {
-                    cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
-                    dwFlags: TME_LEAVE,
-                    hwndTrack: hwnd,
-                    dwHoverTime: 0,
-                };
-                self.surfaces[i].tracking = unsafe { TrackMouseEvent(&mut t) }.is_ok();
-                if !self.surfaces[i].open {
-                    unsafe { SetTimer(Some(hwnd), HOVER_TIMER, HOVER_DELAY_MS, None) };
+            WM_MOUSEMOVE => {
+                if !self.surfaces[i].tracking {
+                    let mut t = TRACKMOUSEEVENT {
+                        cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                        dwFlags: TME_LEAVE,
+                        hwndTrack: hwnd,
+                        dwHoverTime: 0,
+                    };
+                    self.surfaces[i].tracking = unsafe { TrackMouseEvent(&mut t) }.is_ok();
+                    if !self.surfaces[i].open {
+                        unsafe { SetTimer(Some(hwnd), HOVER_TIMER, HOVER_DELAY_MS, None) };
+                    }
                 }
+                let (x, y) = (lp.0 as i16 as f32, (lp.0 >> 16) as i16 as f32);
+                let hot = self.hot_at(i, x, y);
+                // Held down and moved off: no longer pressed.
+                let pressed = self.pressed && hot == self.hot;
+                self.set_hot(i, hot, pressed);
             }
             WM_MOUSELEAVE => {
+                self.set_hot(i, None, false);
                 self.surfaces[i].tracking = false;
                 unsafe {
                     let _ = KillTimer(Some(hwnd), HOVER_TIMER);
@@ -2020,9 +2098,14 @@ impl App {
                 let (x, y) = (lp.0 as i16 as i32, (lp.0 >> 16) as i16 as i32);
                 self.wheel(i, x, y, (wp.0 >> 16) as i16);
             }
+            WM_LBUTTONDOWN => self.set_hot(i, self.hot, true),
             WM_LBUTTONUP => {
                 let (x, y) = (lp.0 as i16 as f32, (lp.0 >> 16) as i16 as f32);
                 self.click(i, x, y);
+                // A tab chosen is no longer one to choose; a disabled
+                // button no longer lit.
+                let hot = self.hot_at(i, x, y);
+                self.set_hot(i, hot, false);
             }
             WM_DPICHANGED | WM_DISPLAYCHANGE | WM_APP_LAYOUT => self.layout(),
             // Clicking the island never takes the focus from the app in use.
@@ -2805,6 +2888,9 @@ fn main() -> Result<()> {
             peek_w: 0.0,
             closed_w: layout::CLOSED_MEDIA_WIDTH,
             page: defaults.default_page,
+            page_from: None,
+            hot: None,
+            pressed: false,
             timer: focus::Timer::new(&defaults.focus),
             start: Instant::now(),
             notice: None,

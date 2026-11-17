@@ -532,7 +532,7 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
             }
         }
         "page" => {
-            app.page = Page::parse(&text(cmd, 1)).ok_or("«page»: home o focus")?;
+            app.show_page(Page::parse(&text(cmd, 1)).ok_or("«page»: home o focus")?);
             app.redraw_all();
         }
         "wait" => set_wait(Wait::Until(in_ms(arg_f(cmd, 1)?))),
