@@ -646,6 +646,14 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
         // with WM_DISPLAYCHANGE and WM_DPICHANGED.
         // Explorer's word that an app went full screen on island j's screen
         // (1) or left it (0), as if checked; no full-screen app needed.
+        "active" => {
+            let j = arg_f(cmd, 1)? as usize;
+            if j >= app.surfaces.len() {
+                return Err(format!("«active»: no hay isla {j}"));
+            }
+            SCREEN.set(Some(j));
+            note(&format!("activa: isla {j}"));
+        }
         "full-screen" => {
             let j = arg_f(cmd, 1)? as usize;
             let on = arg_f(cmd, 2)? != 0.0;
@@ -678,7 +686,7 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
             for (i, sf) in app.surfaces.iter().enumerate() {
                 let (r, w) = (sf.monitor.rect, sf.monitor.work);
                 note(&format!(
-                    "isla {i}: id «{}», pantalla {}x{} en ({}, {}), trabajo {}x{} en ({}, {}), ventana en ({}, {})",
+                    "isla {i}: id «{}», pantalla {}x{} en ({}, {}), trabajo {}x{} en ({}, {}), ventana en ({}, {}), alto {:.0}{}",
                     sf.id,
                     r.width,
                     r.height,
@@ -689,7 +697,9 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
                     w.x,
                     w.y,
                     sf.window.x,
-                    sf.window.y
+                    sf.window.y,
+                    sf.height.target,
+                    if sf.muted { ", muda" } else { "" }
                 ));
             }
         }
@@ -718,6 +728,13 @@ thread_local! {
     static LAYOUTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     /// Screens made up by `fake-monitor`.
     static FAKE: RefCell<Vec<(Monitor, String)>> = const { RefCell::new(Vec::new()) };
+    /// The island `active` says is on the screen being looked at.
+    static SCREEN: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// The island set by `active`, in place of the real active screen.
+pub fn active_screen() -> Option<usize> {
+    SCREEN.get()
 }
 
 /// The made-up screens, for the list of connected ones.

@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 use crate::color;
 use crate::focus::Lengths;
 use crate::media::{self, SongText, TextAlign};
-use crate::monitor::{MonitorChoice, Pick};
+use crate::monitor::{GlanceScreen, MonitorChoice, Pick};
 use crate::pages::Page;
 use crate::shape::{Placement, Style};
 
@@ -132,6 +132,8 @@ pub struct Settings {
     /// The silhouette's corners: smooth (Apple's) or classic.
     pub shape: Style,
     pub monitor: MonitorChoice,
+    /// Where the glances that tell something show (see [`GlanceScreen`]).
+    pub glance_screen: GlanceScreen,
     pub text_align: TextAlign,
     pub song_text: SongText,
     /// Synced lyrics from lrclib.net (off: it sends the song's name there).
@@ -192,6 +194,7 @@ impl Default for Settings {
             placement: Placement::default(),
             shape: Style::default(),
             monitor: MonitorChoice::default(),
+            glance_screen: GlanceScreen::All,
             text_align: TextAlign::default(),
             song_text: SongText::default(),
             lyrics: false,
@@ -224,6 +227,7 @@ pub const TEMPLATE: &str = r#"{
   "placement": "top",
   "shape": "smooth",
   "monitor": "primary",
+  "glanceScreen": "all",
   "textAlign": "center",
   "songText": "title-artist",
   "lyrics": false,
@@ -310,6 +314,9 @@ impl Settings {
                 _ => None,
             }
             .unwrap_or(d.monitor),
+            glance_screen: text("glanceScreen")
+                .and_then(GlanceScreen::parse)
+                .unwrap_or(d.glance_screen),
             text_align: text("textAlign")
                 .and_then(TextAlign::parse)
                 .unwrap_or(d.text_align),
@@ -693,6 +700,13 @@ mod tests {
         assert!(Animations::On.on(false) && !Animations::Off.on(true));
         assert!(parse(TEMPLATE).hide_in_full_screen);
         assert!(!parse(r#"{"hideInFullScreen": false}"#).hide_in_full_screen);
+        assert_eq!(parse(TEMPLATE).glance_screen, GlanceScreen::All);
+        let s = parse(r#"{"glanceScreen": "active"}"#);
+        assert_eq!(s.glance_screen, GlanceScreen::Active);
+        assert_eq!(
+            parse(r#"{"glanceScreen": 2}"#).glance_screen,
+            GlanceScreen::All
+        );
     }
 
     #[test]
