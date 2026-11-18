@@ -62,6 +62,9 @@ enum Wait {
     Until(Instant),
     Rest(Instant),
     Idle(Instant),
+    /// Until an app is in full screen on an island's screen (a real one,
+    /// put there by hand).
+    Full(Instant),
 }
 
 /// A strip of the screen, in px.
@@ -356,6 +359,14 @@ pub fn step(app: &mut App) {
             match q.wait {
                 Wait::None => {}
                 Wait::Until(at) if Instant::now() < at => return Some(None),
+                Wait::Full(at) if !app.surfaces.iter().any(|s| s.full) => {
+                    if Instant::now() > at {
+                        q.fail("6 ninguna app llega a pantalla completa".into());
+                        q.wait = Wait::None;
+                    }
+                    return Some(None);
+                }
+                Wait::Full(_) => {}
                 Wait::Rest(at) if !still => {
                     if Instant::now() > at {
                         q.fail("4 no llega al reposo a tiempo".into());
@@ -542,6 +553,7 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
         "wait" => set_wait(Wait::Until(in_ms(arg_f(cmd, 1)?))),
         "wait-rest" => set_wait(Wait::Rest(in_ms(arg_f(cmd, 1).unwrap_or(10_000.0)))),
         "idle" => set_wait(Wait::Idle(in_ms(arg_f(cmd, 1)?))),
+        "wait-full" => set_wait(Wait::Full(in_ms(arg_f(cmd, 1).unwrap_or(120_000.0)))),
         "background" => background(app),
         "grab" => {
             let name = cmd.get(1).ok_or("«grab» pide un nombre")?.clone();
@@ -686,7 +698,7 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
             for (i, sf) in app.surfaces.iter().enumerate() {
                 let (r, w) = (sf.monitor.rect, sf.monitor.work);
                 note(&format!(
-                    "isla {i}: id «{}», pantalla {}x{} en ({}, {}), trabajo {}x{} en ({}, {}), ventana en ({}, {}), alto {:.0}{}",
+                    "isla {i}: id «{}», pantalla {}x{} en ({}, {}), trabajo {}x{} en ({}, {}), ventana en ({}, {}), alto {:.0}{}{}",
                     sf.id,
                     r.width,
                     r.height,
@@ -699,7 +711,8 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
                     sf.window.x,
                     sf.window.y,
                     sf.height.target,
-                    if sf.muted { ", muda" } else { "" }
+                    if sf.muted { ", muda" } else { "" },
+                    if sf.full { ", pantalla completa" } else { "" }
                 ));
             }
         }

@@ -1272,7 +1272,11 @@ impl App {
                 }
             }
         }
+        let toast = n.toast;
         self.notice = Some(n);
+        if toast {
+            self.over_full_screen();
+        }
         unsafe {
             let _ = KillTimer(Some(self.anchor), PEEK_TIMER);
             SetTimer(Some(self.anchor), PEEK_TIMER, ms, None);
@@ -1442,9 +1446,13 @@ impl App {
         }
         let ms = self.toast_ms(&n.body);
         self.notify(n, ms);
-        // Over a full-screen app: an island hidden under it comes out for
-        // the glance, and goes on top again (a full-screen window may have
-        // gone over it), without taking the focus. Only where it shows.
+    }
+
+    /// A notification's glance over a full-screen app: an island hidden
+    /// under it comes out for the glance, and goes on top again (a
+    /// full-screen window may have gone over it), without taking the
+    /// focus. Only where it shows.
+    fn over_full_screen(&mut self) {
         let over: Vec<HWND> = self
             .surfaces
             .iter()
