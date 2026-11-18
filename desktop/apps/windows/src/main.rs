@@ -1417,7 +1417,7 @@ impl App {
             let quiet_since = self
                 .last_sound
                 .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(1));
-            if self.settings.notification_sound && !quiet_since {
+            if self.settings.notification_sound && !a.silent && !quiet_since {
                 notification_sound();
                 self.last_sound = Some(Instant::now());
             }

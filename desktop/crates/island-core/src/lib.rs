@@ -25,6 +25,7 @@ pub mod spring;
 pub mod svg;
 pub mod texts;
 pub mod theme;
+pub mod toast_xml;
 pub mod update;
 
 /// Version of the desktop apps, from the workspace.
