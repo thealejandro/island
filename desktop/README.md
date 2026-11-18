@@ -235,7 +235,8 @@ does the same without opening the island; uninstalling does it too).
 With the banners off, the island plays Windows' own notification sound
 when one arrives, since Windows itself no longer does
 (`notificationSound: false` keeps it silent; a notification that asks for
-silence gets none either).
+silence gets none either, nor one from an app whose "Play a sound" is off
+in Settings).
 With an app in full screen the glance shows too
 (`notificationsInFullScreen` moves it to another screen or keeps it away, screen by screen); never while
 presenting, in a game in exclusive full screen or with Do Not Disturb
