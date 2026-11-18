@@ -249,6 +249,8 @@ fn logo(l: &UserNotificationListener, id: u32) -> Option<Vec<u8>> {
 pub struct Arrived {
     pub toast: Toast,
     pub logo: Option<Arc<Vec<u8>>>,
+    /// It asks to make no sound: the island plays none for it either.
+    pub silent: bool,
 }
 
 fn read(l: &UserNotificationListener, fallback: &str) -> Result<Vec<Toast>> {
@@ -388,15 +390,19 @@ fn watch(
         // Only the newest is glanced at: only its picture is read: the
         // notification's own image when it has one, else the app's logo.
         let last = fresh.len() - 1;
-        let arrived = fresh.into_iter().enumerate().map(|(i, toast)| Arrived {
-            logo: (i == last)
-                .then(|| {
-                    crate::toast_image::image(toast.id)
-                        .or_else(|| logo(&l, toast.id))
-                        .map(Arc::new)
-                })
-                .flatten(),
-            toast,
+        let arrived = fresh.into_iter().enumerate().map(|(i, toast)| {
+            let read = if i == last {
+                crate::toast_image::read(toast.id)
+            } else {
+                Default::default()
+            };
+            Arrived {
+                logo: (i == last)
+                    .then(|| read.image.or_else(|| logo(&l, toast.id)).map(Arc::new))
+                    .flatten(),
+                silent: read.silent,
+                toast,
+            }
         });
         if let Ok(mut n) = new.lock() {
             n.extend(arrived);

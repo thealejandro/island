@@ -658,6 +658,10 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
         // with WM_DISPLAYCHANGE and WM_DPICHANGED.
         // Explorer's word that an app went full screen on island j's screen
         // (1) or left it (0), as if checked; no full-screen app needed.
+        "newest-silent" => note(&format!(
+            "la más reciente pide silencio: {:?}",
+            crate::toast_image::newest_silent()
+        )),
         "active" => {
             let j = arg_f(cmd, 1)? as usize;
             if j >= app.surfaces.len() {
