@@ -34,8 +34,8 @@ pub struct Size {
     pub text_x: f32,
     switch: (f32, f32),
     knob_inset: f32,
-    /// Between a switch and the row's right end.
-    switch_end: f32,
+    /// Between a switch, or a choice's value, and the row's right end.
+    pub switch_end: f32,
     /// The rows', the name's and the version's text.
     pub font: f32,
     pub head_font: f32,
@@ -89,6 +89,9 @@ impl Look {
 pub enum Kind {
     /// A setting with a switch: choosing it flips the switch, the menu stays.
     Toggle,
+    /// A setting with a few values, the one in use on the right: choosing
+    /// it moves to the next, the menu stays.
+    Choice,
     /// Does something and closes the menu.
     Action,
     Separator,

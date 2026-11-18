@@ -41,14 +41,15 @@ impl Moment {
 
 /// Whether a notification that just arrived gets a glance. Never while
 /// presenting, gaming or away; with Do Not Disturb (`quiet`) neither, but
-/// in full screen the setting (`in_full_screen`) decides: Windows 11 turns
-/// Do Not Disturb on by itself there, which is just when the island should
-/// still tell. Windows' own banner plays no part: with an app's banners
+/// in full screen yes: Windows 11 turns Do Not Disturb on by itself there,
+/// which is just when the island should still tell. Windows' own banner plays no part: with an app's banners
 /// turned off, the island still shows its notifications.
-pub fn glances(moment: Moment, quiet: bool, in_full_screen: bool) -> bool {
+pub fn glances(moment: Moment, quiet: bool) -> bool {
     match moment {
         Moment::Free => !quiet,
-        Moment::FullScreen => in_full_screen,
+        // Which islands, if any, by `notificationsInFullScreen` (see
+        // `monitor::glance_targets`).
+        Moment::FullScreen => true,
         Moment::Game | Moment::Presenting | Moment::Away | Moment::Quiet => false,
     }
 }
@@ -265,16 +266,14 @@ mod tests {
     #[test]
     fn full_screen_glances_but_presenting_gaming_and_quiet_never() {
         use Moment::*;
-        assert!(glances(Free, false, false));
-        assert!(glances(FullScreen, false, true));
-        assert!(!glances(FullScreen, false, false));
+        assert!(glances(Free, false));
+        assert!(glances(FullScreen, false));
         for m in [Game, Presenting, Away, Quiet] {
-            assert!(!glances(m, false, true));
+            assert!(!glances(m, false));
         }
-        assert!(!glances(Free, true, true));
+        assert!(!glances(Free, true));
         // Windows 11 turns Do Not Disturb on by itself in full screen.
-        assert!(glances(FullScreen, true, true));
-        assert!(!glances(FullScreen, true, false));
+        assert!(glances(FullScreen, true));
         assert_eq!(Moment::from_state(2), FullScreen);
         assert_eq!(Moment::from_state(3), Game);
         assert_eq!(Moment::from_state(4), Presenting);

@@ -179,6 +179,15 @@ pub enum GlanceScreen {
 }
 
 impl GlanceScreen {
+    pub const ALL: [Self; 2] = [Self::All, Self::Active];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Active => "active",
+        }
+    }
+
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "all" => Some(Self::All),
@@ -188,14 +197,81 @@ impl GlanceScreen {
     }
 }
 
-/// Which of `islands` islands show a glance: all of them, or only the
-/// active screen's (`active`, an island's index); with that screen having
-/// no island, all of them, so nothing is missed.
-pub fn glance_targets(islands: usize, active: Option<usize>, screen: GlanceScreen) -> Vec<bool> {
-    match (screen, active) {
-        (GlanceScreen::Active, Some(a)) if a < islands => (0..islands).map(|i| i == a).collect(),
-        _ => vec![true; islands],
+/// Where a notification's glance goes while an app is in full screen on
+/// an island's screen (`notificationsInFullScreen`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FullScreen {
+    /// Over the app, on that screen too.
+    #[default]
+    Here,
+    /// Not over it: on another screen's island instead.
+    Other,
+    /// Not over it, and nowhere else for it.
+    Hide,
+}
+
+impl FullScreen {
+    pub const ALL: [Self; 3] = [Self::Here, Self::Other, Self::Hide];
+
+    /// `here`, `other`, `hide`; `true` and `false` (as it was) are `here`
+    /// and `hide`.
+    pub fn parse(v: &serde_json::Value) -> Option<Self> {
+        match v {
+            serde_json::Value::Bool(true) => Some(Self::Here),
+            serde_json::Value::Bool(false) => Some(Self::Hide),
+            serde_json::Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+                "here" => Some(Self::Here),
+                "other" => Some(Self::Other),
+                "hide" => Some(Self::Hide),
+                _ => None,
+            },
+            _ => None,
+        }
     }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Here => "here",
+            Self::Other => "other",
+            Self::Hide => "hide",
+        }
+    }
+}
+
+/// Which islands show a glance. `full` has one entry per island: an app is
+/// in full screen on its screen. `active` is the active screen's island;
+/// `fallback`, the islands in the order a glance moved off a full screen
+/// takes (the main screen's first, then left to right).
+///
+/// `screen` picks all of them or the active one (all, with the active
+/// screen having no island, so nothing is missed). Then, under a
+/// full-screen app, `fs`: `Here` keeps the island, `Hide` drops it, and
+/// `Other` drops it too, moving the glance to the first island in
+/// `fallback` without one when none is left; with every island under one,
+/// it stays where it was (missing a notification is worse).
+pub fn glance_targets(
+    full: &[bool],
+    active: Option<usize>,
+    fallback: &[usize],
+    screen: GlanceScreen,
+    fs: FullScreen,
+) -> Vec<bool> {
+    let n = full.len();
+    let chosen: Vec<bool> = match (screen, active) {
+        (GlanceScreen::Active, Some(a)) if a < n => (0..n).map(|i| i == a).collect(),
+        _ => vec![true; n],
+    };
+    if fs == FullScreen::Here {
+        return chosen;
+    }
+    let mut on: Vec<bool> = chosen.iter().zip(full).map(|(&c, &f)| c && !f).collect();
+    if fs == FullScreen::Other && !on.contains(&true) {
+        match fallback.iter().find(|&&j| j < n && !full[j]) {
+            Some(&j) => on[j] = true,
+            None => return chosen,
+        }
+    }
+    on
 }
 
 #[cfg(test)]
@@ -205,16 +281,63 @@ mod tests {
     #[test]
     fn glances_go_to_the_active_screen_or_to_all() {
         use GlanceScreen::*;
-        assert_eq!(glance_targets(2, Some(1), All), vec![true, true]);
-        assert_eq!(glance_targets(2, Some(1), Active), vec![false, true]);
-        assert_eq!(glance_targets(3, Some(0), Active), vec![true, false, false]);
+        let t = |n: usize, a, s| glance_targets(&vec![false; n], a, &[], s, FullScreen::Other);
+        assert_eq!(t(2, Some(1), All), vec![true, true]);
+        assert_eq!(t(2, Some(1), Active), vec![false, true]);
+        assert_eq!(t(3, Some(0), Active), vec![true, false, false]);
         // The active screen has no island: all of them.
-        assert_eq!(glance_targets(2, None, Active), vec![true, true]);
-        assert_eq!(glance_targets(2, Some(5), Active), vec![true, true]);
-        assert_eq!(glance_targets(1, Some(0), Active), vec![true]);
-        assert_eq!(glance_targets(0, None, Active), Vec::<bool>::new());
+        assert_eq!(t(2, None, Active), vec![true, true]);
+        assert_eq!(t(2, Some(5), Active), vec![true, true]);
+        assert_eq!(t(1, Some(0), Active), vec![true]);
+        assert_eq!(t(0, None, Active), Vec::<bool>::new());
         assert_eq!(GlanceScreen::parse(" ACTIVE "), Some(Active));
         assert_eq!(GlanceScreen::parse("one"), None);
+    }
+
+    #[test]
+    fn full_screen_keeps_drops_or_moves_the_glance() {
+        use FullScreen::*;
+        use GlanceScreen::*;
+        // Island 0 under a full-screen app; 1 (the main screen's) and 2 not.
+        let full = [true, false, false];
+        let fb = [1, 0, 2];
+        let t = |a, s, fs| glance_targets(&full, a, &fb, s, fs);
+        assert_eq!(t(None, All, Here), vec![true, true, true]);
+        assert_eq!(t(None, All, Hide), vec![false, true, true]);
+        assert_eq!(t(None, All, Other), vec![false, true, true]);
+        // Only on the active screen, the full one.
+        assert_eq!(t(Some(0), Active, Here), vec![true, false, false]);
+        assert_eq!(t(Some(0), Active, Hide), vec![false, false, false]);
+        assert_eq!(t(Some(0), Active, Other), vec![false, true, false]);
+        assert_eq!(t(Some(2), Active, Other), vec![false, false, true]);
+        // The main screen's under one too: the next, left to right.
+        let full = [false, true, true];
+        assert_eq!(
+            glance_targets(&full, Some(1), &fb, Active, Other),
+            vec![true, false, false]
+        );
+        // Every one under one (or a single screen): it stays.
+        assert_eq!(
+            glance_targets(&[true, true], None, &[0, 1], All, Other),
+            vec![true, true]
+        );
+        assert_eq!(
+            glance_targets(&[true], Some(0), &[0], Active, Other),
+            vec![true]
+        );
+        assert_eq!(
+            glance_targets(&[true], Some(0), &[0], Active, Hide),
+            vec![false]
+        );
+        use serde_json::json;
+        assert_eq!(FullScreen::parse(&json!(true)), Some(Here));
+        assert_eq!(FullScreen::parse(&json!(false)), Some(Hide));
+        assert_eq!(FullScreen::parse(&json!(" Other ")), Some(Other));
+        assert_eq!(FullScreen::parse(&json!("away")), None);
+        assert_eq!(FullScreen::parse(&json!(1)), None);
+        for f in FullScreen::ALL {
+            assert_eq!(FullScreen::parse(&json!(f.name())), Some(f));
+        }
     }
 
     fn mon(x: f32, y: f32, primary: bool) -> Monitor {
