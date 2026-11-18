@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, KEY_READ, REG_DWORD, RRF_RT_REG_DWORD, RegCloseKey,
+    HKEY, HKEY_CURRENT_USER, KEY_READ, REG_DWORD, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegCloseKey,
     RegDeleteKeyValueW, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, RegSetKeyValueW,
 };
 use windows::core::{HSTRING, PWSTR, w};
@@ -81,6 +81,36 @@ fn show_banner(app_id: &str) -> Option<u32> {
         )
     };
     (e == ERROR_SUCCESS).then_some(v)
+}
+
+/// The app's "Play a sound when a notification arrives" is off. Settings
+/// keeps that as an empty `SoundFile` under the app's key (and deletes the
+/// value when it's turned back on); unset or naming a sound, it's on.
+pub fn sound_off(app_id: &str) -> bool {
+    if !usable(app_id) {
+        return false;
+    }
+    let key = HSTRING::from(format!("{SETTINGS}\\{app_id}"));
+    // Its size only: an empty string is just its terminator.
+    let mut size = 0u32;
+    let e = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            &key,
+            w!("SoundFile"),
+            RRF_RT_REG_SZ,
+            None,
+            None,
+            Some(&mut size),
+        )
+    };
+    e == ERROR_SUCCESS && empty_string(size)
+}
+
+/// A REG_SZ of `bytes` (terminator included, as RegGetValueW tells) holds
+/// nothing.
+fn empty_string(bytes: u32) -> bool {
+    bytes <= 2
 }
 
 /// Turns off the banner of `app_id`, unless it is off already or one of
@@ -250,5 +280,12 @@ mod tests {
         assert!(!usable("\\Software"));
         assert!(system("Windows.SystemToast.SecurityAndMaintenance"));
         assert!(!system("Microsoft.Office.OUTLOOK.EXE.15"));
+    }
+
+    #[test]
+    fn an_empty_sound_file_is_just_its_terminator() {
+        assert!(empty_string(2));
+        assert!(!empty_string(4));
+        assert!(!sound_off("..\\x"));
     }
 }
