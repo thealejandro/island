@@ -16,8 +16,10 @@ use windows::core::{HRESULT, HSTRING, PCWSTR, w};
 pub enum NetError {
     /// No way to the server: no network, no name, refused or timed out.
     Offline,
-    /// Anything else: TLS, a cut answer, or a body bigger than asked for.
+    /// Anything else: TLS or a cut answer.
     Failed,
+    /// The body is bigger than asked for; asking again won't change that.
+    TooBig,
 }
 
 /// WinHTTP's errors that mean the server can't be reached.
@@ -121,7 +123,7 @@ pub fn get(host: &str, path: &str, cap: usize) -> Result<(u32, Vec<u8>), NetErro
             }
             body.extend_from_slice(&chunk[..read as usize]);
             if body.len() > cap {
-                return Err(NetError::Failed);
+                return Err(NetError::TooBig);
             }
         }
         Ok((code, body))

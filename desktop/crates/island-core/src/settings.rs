@@ -125,6 +125,16 @@ impl Animations {
     }
 }
 
+/// A text that never prints: a private link.
+#[derive(Clone, PartialEq, Default)]
+pub struct Hidden(pub String);
+
+impl std::fmt::Debug for Hidden {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<hidden>")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     pub language: Language,
@@ -160,6 +170,12 @@ pub struct Settings {
     pub battery_glance: bool,
     /// A glance when the built-in screen's brightness changes.
     pub brightness_glance: bool,
+    /// Reminders of the agenda's events (see [`crate::agenda`]).
+    pub agenda_glance: bool,
+    /// The calendar's private iCalendar link; empty: none. Never shown.
+    pub agenda_url: Hidden,
+    /// How many minutes before an event its reminder shows.
+    pub reminder_lead: u32,
     /// A glance when a notification shows: its app and title.
     pub notification_glance: bool,
     /// Where those glances go while an app is in full screen on a screen
@@ -193,6 +209,8 @@ pub struct Settings {
 
 /// `lyricsDelay`'s range, in ms.
 pub const LYRICS_DELAY: (u32, u32) = (0, 2000);
+/// `reminderLead`'s range, in minutes.
+pub const REMINDER_LEAD: (u32, u32) = (0, 120);
 /// `islandScale`'s range: the closed island and its glances, times this.
 pub const ISLAND_SCALE: (f32, f32) = (0.8, 1.4);
 /// "auto" over Bluetooth speakers or headphones: what they add, about.
@@ -220,6 +238,9 @@ impl Default for Settings {
             bluetooth_glance: true,
             battery_glance: true,
             brightness_glance: true,
+            agenda_glance: true,
+            agenda_url: Hidden::default(),
+            reminder_lead: 10,
             notification_glance: true,
             notifications_in_full_screen: FullScreen::Here,
             notification_sound: true,
@@ -271,6 +292,9 @@ pub const TEMPLATE: &str = r#"{
   "bluetoothGlance": true,
   "batteryGlance": true,
   "brightnessGlance": true,
+  "agendaGlance": true,
+  "agendaUrl": "",
+  "reminderLead": 10,
   "notificationGlance": true,
   "notificationsInFullScreen": "here",
   "notificationSound": true,
@@ -380,6 +404,15 @@ impl Settings {
             bluetooth_glance: flag("bluetoothGlance", d.bluetooth_glance),
             battery_glance: flag("batteryGlance", d.battery_glance),
             brightness_glance: flag("brightnessGlance", d.brightness_glance),
+            agenda_glance: flag("agendaGlance", d.agenda_glance),
+            agenda_url: Hidden(
+                text("agendaUrl")
+                    .map(str::trim)
+                    .filter(|u| u.len() <= crate::agenda::MAX_URL)
+                    .unwrap_or("")
+                    .to_string(),
+            ),
+            reminder_lead: minutes("reminderLead", REMINDER_LEAD, d.reminder_lead),
             notification_glance: flag("notificationGlance", d.notification_glance),
             notifications_in_full_screen: o
                 .get("notificationsInFullScreen")
@@ -596,6 +629,28 @@ mod tests {
         assert!(parse("{}").battery_glance);
         assert!(!parse(r#"{"brightnessGlance": false}"#).brightness_glance);
         assert!(parse("{}").brightness_glance);
+        assert!(!parse(r#"{"agendaGlance": false}"#).agenda_glance);
+        assert!(parse("{}").agenda_glance);
+        let lead = |t: &str| parse(t).reminder_lead;
+        assert_eq!(lead("{}"), 10);
+        assert_eq!(lead(r#"{"reminderLead": 0}"#), 0);
+        assert_eq!(lead(r#"{"reminderLead": 120}"#), 120);
+        assert_eq!(lead(r#"{"reminderLead": 121}"#), 10);
+        assert_eq!(lead(r#"{"reminderLead": "x"}"#), 10);
+        let url = |t: &str| parse(t).agenda_url.0;
+        let shown = format!("{:?}", parse(r#"{"agendaUrl": "https://a.b/secret.ics"}"#));
+        assert!(!shown.contains("secret") && shown.contains("<hidden>"));
+        assert_eq!(url("{}"), "");
+        assert_eq!(
+            url(r#"{"agendaUrl": "  https://a.b/c.ics "}"#),
+            "https://a.b/c.ics"
+        );
+        assert_eq!(url(r#"{"agendaUrl": 5}"#), "");
+        let long = format!(
+            r#"{{"agendaUrl": "{}"}}"#,
+            "a".repeat(crate::agenda::MAX_URL + 1)
+        );
+        assert_eq!(url(&long), "");
         assert!(!parse(r#"{"notificationGlance": false}"#).notification_glance);
         let fs = |t: &str| parse(t).notifications_in_full_screen;
         assert_eq!(

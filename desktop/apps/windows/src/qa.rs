@@ -19,6 +19,7 @@
 //!   power notice would tell (the first one is no news).
 //! - `brightness <0-100>`: the built-in screen's brightness, as a power
 //!   notice would tell (the first one is no news).
+//! - `agenda "<title>" <minutes>`: an event's reminder (0: now).
 //! - `open [i]`, `close [i]`: one island (or all) opens or closes.
 //! - `page home|focus`.
 //! - `wait <ms>`; `wait-rest [ms]`: until every island is still (checks it
@@ -139,6 +140,7 @@ pub fn from_args(args: &[String]) -> std::io::Result<bool> {
         "bluetoothGlance",
         "batteryGlance",
         "brightnessGlance",
+        "agendaGlance",
         "notificationGlance",
         "updateCheck",
     ] {
@@ -525,6 +527,7 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
             }
         }
         "brightness" => app.brightness_changed(arg_f(cmd, 1)?.clamp(0.0, 100.0) as u8, 0),
+        "agenda" => app.agenda_note(&text(cmd, 1), arg_f(cmd, 2)?.max(0.0) as u32),
         "level" => {
             let level = arg_f(cmd, 1)?.clamp(0.0, 1.0);
             app.notify(

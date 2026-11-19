@@ -1,6 +1,7 @@
 // No console window in release builds; debug builds keep it for logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agenda;
 mod banners;
 mod bars;
 mod battery;
@@ -26,11 +27,13 @@ mod update;
 mod volume;
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicIsize};
 use std::time::Instant;
 
+use island_core::agenda as core_agenda;
 use island_core::battery::Note as BatteryNote;
 use island_core::bluetooth::Event as BtEvent;
 use island_core::focus::{self, Ended, Lengths, Phase};
@@ -239,6 +242,10 @@ const WM_APP_OPEN: u32 = WM_APP + 13;
 const WM_APP_QUIT: u32 = WM_APP + 14;
 /// The installed island's first start: a glance says it is installed.
 const WM_APP_INSTALLED: u32 = WM_APP + 15;
+/// The agenda's worker has events (see `agenda.rs`).
+const WM_APP_AGENDA: u32 = WM_APP + 21;
+/// `events.json` changed.
+const WM_APP_AGENDA_FILE: u32 = WM_APP + 22;
 /// Opened from outside its install folder: the offer to install, under the
 /// island.
 const WM_APP_OFFER: u32 = WM_APP + 16;
@@ -328,6 +335,8 @@ const BLUETOOTH_TIMER: usize = 8;
 /// after a read that failed (another app had it open), a few times.
 const THEME_TIMER: usize = 9;
 const THEME_WAIT_MS: u32 = 150;
+/// When the next event's reminder is due (one shot, set again each time).
+const AGENDA_TIMER: usize = 10;
 const THEME_TRIES: u8 = 3;
 /// The wheel changes the focus length by this many minutes.
 const WHEEL_MINUTES: i32 = 5;
@@ -768,6 +777,14 @@ struct App {
     /// on, and what it last told.
     brightness: Option<brightness::Brightness>,
     brightness_watch: island_core::brightness::Watch,
+    /// The agenda's worker, while its reminders are on; the events it found,
+    /// the reminders already told, and the link it was given.
+    agenda: Option<agenda::Agenda>,
+    events: Vec<core_agenda::Event>,
+    agenda_fired: HashSet<String>,
+    agenda_url: String,
+    /// `events.json` is being watched (once is enough).
+    agenda_watched: bool,
     /// The watch on notifications, while that glance is on and Windows
     /// lets the island read them.
     notifications: Option<notifications::Notifications>,
@@ -1436,6 +1453,72 @@ impl App {
             ..Default::default()
         };
         self.notify(n, PEEK_MS);
+    }
+
+    /// The agenda's worker has events: they are used, and the reminders
+    /// looked at.
+    fn agenda_update(&mut self) {
+        if let Some(list) = self.agenda.as_ref().and_then(agenda::Agenda::take) {
+            self.events = list;
+        }
+        self.check_agenda();
+    }
+
+    /// Tells the reminders that are due, one glance for all, each once, and
+    /// sets the timer for the next.
+    fn check_agenda(&mut self) {
+        unsafe {
+            let _ = KillTimer(Some(self.anchor), AGENDA_TIMER);
+        }
+        if self.agenda.is_none() {
+            return;
+        }
+        let now = agenda::now_local();
+        // Keys begin with their day: yesterday's are not needed any more.
+        let today = core_agenda::date_of(now).iso();
+        self.agenda_fired
+            .retain(|k| k.get(..10).is_some_and(|d| d >= today.as_str()));
+        let lead = self.settings.reminder_lead;
+        // One at a time: only the one told is marked, so the others are
+        // told after this glance (the timer below), not lost.
+        let mut pending = core_agenda::due_reminders(&self.events, now, lead)
+            .into_iter()
+            .filter(|d| !self.agenda_fired.contains(&d.key));
+        let first = pending.next();
+        let more = pending.next().is_some();
+        if let Some(due) = first {
+            self.agenda_fired.insert(due.key);
+            self.agenda_note(&due.title, due.minutes);
+        }
+        if more {
+            unsafe {
+                SetTimer(
+                    Some(self.anchor),
+                    AGENDA_TIMER,
+                    core_agenda::GLANCE_MS + 500,
+                    None,
+                );
+            }
+        } else if let Some(at) = core_agenda::next_due(&self.events, now, lead) {
+            let secs = (at - now).clamp(1, 24 * 3600) as u32;
+            unsafe {
+                SetTimer(Some(self.anchor), AGENDA_TIMER, secs * 1000 + 500, None);
+            }
+        }
+    }
+
+    /// An event is about to start: a glance with its title and how long is
+    /// left.
+    fn agenda_note(&mut self, title: &str, minutes: u32) {
+        let n = Notice {
+            icon: island_core::icons::Icon::Calendar,
+            tint: render::WHITE,
+            title: title.to_string().into(),
+            detail: core_agenda::detail(self.texts, minutes),
+            level: None,
+            ..Default::default()
+        };
+        self.notify(n, core_agenda::GLANCE_MS);
     }
 
     /// The island on the active screen, if that screen has one.
@@ -2198,6 +2281,30 @@ impl App {
                 self.brightness_watch = Default::default();
             }
         }
+        if s.agenda_glance != self.agenda.is_some() {
+            self.agenda = s
+                .agenda_glance
+                .then(|| agenda::Agenda::start(self.anchor, WM_APP_AGENDA, s.agenda_url.0.clone()));
+            if self.agenda.is_none() {
+                self.events.clear();
+                unsafe {
+                    let _ = KillTimer(Some(self.anchor), AGENDA_TIMER);
+                }
+            } else if !self.agenda_watched
+                && let Some(f) = agenda::folder()
+            {
+                let _ = std::fs::create_dir_all(&f);
+                self.agenda_watched =
+                    settings_file::watch_file(f, agenda::FILE, self.anchor, WM_APP_AGENDA_FILE);
+            }
+        } else if let Some(a) = &self.agenda
+            && s.agenda_url.0 != self.agenda_url
+        {
+            a.set_url(s.agenda_url.0.clone());
+        }
+        self.agenda_url = s.agenda_url.0.clone();
+        // A changed lead moves the reminders.
+        self.check_agenda();
         if s.notification_glance != self.notifications.is_some() {
             self.notifications = s
                 .notification_glance
@@ -2397,6 +2504,13 @@ impl App {
             WM_APP_KEY => self.key_pressed(wp),
             WM_APP_PRIVACY if self.privacy.is_some() => self.privacy_changed(wp.0),
             WM_APP_BLUETOOTH => self.bluetooth_changed(),
+            WM_APP_AGENDA => self.agenda_update(),
+            WM_APP_AGENDA_FILE => {
+                if let Some(a) = &self.agenda {
+                    a.reload();
+                }
+            }
+            WM_TIMER if wp.0 == AGENDA_TIMER => self.check_agenda(),
             WM_POWERBROADCAST if wp.0 as u32 == PBT_POWERSETTINGCHANGE => {
                 if let (Some(_), Some(c)) = (&self.battery, battery::Battery::read(lp))
                     && let Some((note, level)) = self.power.change(c)
@@ -3663,6 +3777,11 @@ fn main() -> Result<()> {
             power: battery::Power::default(),
             brightness: None,
             brightness_watch: Default::default(),
+            agenda: None,
+            events: Vec::new(),
+            agenda_fired: HashSet::new(),
+            agenda_url: String::new(),
+            agenda_watched: false,
             notifications: None,
             pulse: None,
             full_glance: false,
