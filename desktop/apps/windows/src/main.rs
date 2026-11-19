@@ -3,6 +3,7 @@
 
 mod banners;
 mod bars;
+mod battery;
 mod bluetooth;
 mod http;
 mod install;
@@ -29,6 +30,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicIsize};
 use std::time::Instant;
 
+use island_core::battery::Note as BatteryNote;
 use island_core::bluetooth::Event as BtEvent;
 use island_core::focus::{self, Ended, Lengths, Phase};
 use island_core::glance;
@@ -71,13 +73,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     FindWindowExW, GetCursorPos, GetMessageW, GetWindowThreadProcessId, HWND_MESSAGE, HWND_TOPMOST,
     IDC_ARROW, IsWindow, KillTimer, LoadCursorW, MA_NOACTIVATE, MONITORINFOF_PRIMARY, MSG,
-    PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SPI_SETWORKAREA,
-    SW_SHOW, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetTimer,
-    SetWindowPos, ShowWindow, TranslateMessage, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COPYDATA,
-    WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DWMCOLORIZATIONCOLORCHANGED, WM_ENDSESSION,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE,
-    WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    PBT_POWERSETTINGCHANGE, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW,
+    SPI_SETWORKAREA, SW_SHOW, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, TranslateMessage, WM_ACTIVATE, WM_APP,
+    WM_CLOSE, WM_COPYDATA, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
+    WM_DWMCOLORIZATIONCOLORCHANGED, WM_ENDSESSION, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_POWERBROADCAST, WM_RBUTTONUP,
+    WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 use windows::core::BOOL;
 use windows::core::{Error, HSTRING, PCWSTR, Result, w};
@@ -756,6 +759,10 @@ struct App {
     users: [Vec<String>; 2],
     /// The watch on paired Bluetooth devices, while that glance is on.
     bluetooth: Option<bluetooth::Bluetooth>,
+    /// The watch on the battery, while that glance is on, and what it last
+    /// told.
+    battery: Option<battery::Battery>,
+    power: battery::Power,
     /// The watch on notifications, while that glance is on and Windows
     /// lets the island read them.
     notifications: Option<notifications::Notifications>,
@@ -1379,6 +1386,30 @@ impl App {
             tint: island_core::bluetooth::TINT,
             title: title.into(),
             detail: name,
+            level: None,
+            ..Default::default()
+        };
+        self.notify(n, PEEK_MS);
+    }
+
+    /// The battery has news: a glance with the level.
+    fn battery_note(&mut self, note: BatteryNote, level: u8) {
+        let t = self.texts;
+        let title = match note {
+            BatteryNote::Charging => t.charging,
+            BatteryNote::OnBattery => t.on_battery,
+            BatteryNote::Low => t.battery_low,
+            BatteryNote::Full => t.fully_charged,
+        };
+        let n = Notice {
+            icon: note.icon(),
+            tint: if note.urgent() {
+                island_core::battery::LOW_TINT
+            } else {
+                render::WHITE
+            },
+            title: title.into(),
+            detail: format!("{level} %"),
             level: None,
             ..Default::default()
         };
@@ -2127,6 +2158,16 @@ impl App {
                 .then(|| bluetooth::Bluetooth::start(self.anchor, WM_APP_BLUETOOTH).ok())
                 .flatten();
         }
+        if s.battery_glance != self.battery.is_some() {
+            self.battery = None;
+            // Nothing without a battery.
+            if let (true, Some(now)) = (s.battery_glance, battery::status()) {
+                self.battery = battery::Battery::start(self.anchor);
+                if self.battery.is_some() {
+                    self.power = battery::Power::new(now);
+                }
+            }
+        }
         if s.notification_glance != self.notifications.is_some() {
             self.notifications = s
                 .notification_glance
@@ -2326,6 +2367,13 @@ impl App {
             WM_APP_KEY => self.key_pressed(wp),
             WM_APP_PRIVACY if self.privacy.is_some() => self.privacy_changed(wp.0),
             WM_APP_BLUETOOTH => self.bluetooth_changed(),
+            WM_POWERBROADCAST if wp.0 as u32 == PBT_POWERSETTINGCHANGE => {
+                if let (Some(_), Some(c)) = (&self.battery, battery::Battery::read(lp))
+                    && let Some((note, level)) = self.power.change(c)
+                {
+                    self.battery_note(note, level);
+                }
+            }
             WM_APP_NOTIFICATION => self.notified(),
             WM_APP_SPEAKERS => self.speakers_changed(),
             // A move over it comes as a few changes: one read once they end.
@@ -3578,6 +3626,8 @@ fn main() -> Result<()> {
             privacy: None,
             users: Default::default(),
             bluetooth: None,
+            battery: None,
+            power: battery::Power::default(),
             notifications: None,
             pulse: None,
             full_glance: false,
