@@ -170,6 +170,12 @@ pub struct Settings {
     /// the sound comes out later than that (more so over Bluetooth).
     /// `None` ("auto"): by the speakers in use, see [`Settings::lyrics_delay`].
     pub lyrics_delay: Option<u32>,
+    /// The closed island's and the glance's sizes in DIPs, before
+    /// `islandScale` (see [`Settings::sizes`] for how they fit together).
+    pub closed_width: f32,
+    pub closed_height: f32,
+    pub glance_width: f32,
+    pub glance_height: f32,
     /// How big the closed island and its glances are, times this; the open
     /// island keeps its size.
     pub island_scale: f32,
@@ -212,6 +218,10 @@ impl Default for Settings {
             notification_sound: true,
             update_check: true,
             lyrics_delay: None,
+            closed_width: media::CLOSED.0,
+            closed_height: media::CLOSED.1,
+            glance_width: media::PEEK.0,
+            glance_height: media::PEEK.1,
             island_scale: 1.0,
             accent: Accent::System,
             island_color: IslandColor::Black,
@@ -235,6 +245,10 @@ pub const TEMPLATE: &str = r#"{
   "openLyrics": true,
   "openWidth": "auto",
   "defaultPage": "home",
+  "closedWidth": 180,
+  "closedHeight": 32,
+  "glanceWidth": 400,
+  "glanceHeight": 44,
   "islandScale": 1.0,
   "accent": "system",
   "islandColor": "black",
@@ -281,6 +295,18 @@ impl Settings {
                 .and_then(Value::as_u64)
                 .filter(|m| (u64::from(lo)..=u64::from(hi)).contains(m))
                 .map_or(def, |m| m as u32)
+        };
+        // A number is clamped into range (widths in steps of 10); anything
+        // else: the default.
+        let size = |k: &str, range: (f32, f32), step: bool, def: f32| {
+            o.get(k).and_then(Value::as_f64).map_or(def, |v| {
+                let v = v as f32;
+                if step {
+                    media::size_width(v, range)
+                } else {
+                    v.clamp(range.0, range.1)
+                }
+            })
         };
         let df = d.focus;
         Some(Self {
@@ -356,6 +382,10 @@ impl Settings {
                 .and_then(Value::as_u64)
                 .filter(|m| (u64::from(LYRICS_DELAY.0)..=u64::from(LYRICS_DELAY.1)).contains(m))
                 .map(|m| m as u32),
+            closed_width: size("closedWidth", media::CLOSED_WIDTH, true, d.closed_width),
+            closed_height: size("closedHeight", media::CLOSED_HEIGHT, false, d.closed_height),
+            glance_width: size("glanceWidth", media::GLANCE_WIDTH, true, d.glance_width),
+            glance_height: size("glanceHeight", media::GLANCE_HEIGHT, false, d.glance_height),
             // A number is clamped into range; anything else: 1.0 (as made).
             island_scale: o
                 .get("islandScale")
@@ -379,6 +409,17 @@ impl Settings {
     pub fn lyrics_delay(&self, bluetooth: bool) -> u32 {
         self.lyrics_delay
             .unwrap_or(if bluetooth { BLUETOOTH_DELAY } else { 0 })
+    }
+
+    /// The closed island's and the glance's sizes: the settings, with the
+    /// glance kept a little taller than the closed island (see [`media::Sizes::new`]).
+    pub fn sizes(&self) -> media::Sizes {
+        media::Sizes::new(
+            self.closed_width,
+            self.closed_height,
+            self.glance_width,
+            self.glance_height,
+        )
     }
 
     /// The open island's width setting: the chosen one, or 560 (with a
@@ -583,6 +624,35 @@ mod tests {
         assert_eq!(parse(r#"{"islandScale": "big"}"#).island_scale, 1.0);
         assert_eq!(parse(r#"{"islandScale": true}"#).island_scale, 1.0);
         assert_eq!(Settings::default().island_scale, 1.0);
+        // The sizes: numbers are clamped (widths in steps of 10); else as made.
+        let d = Settings::default();
+        assert_eq!(d.sizes(), media::Sizes::default());
+        assert_eq!(parse(TEMPLATE).sizes(), media::Sizes::default());
+        let s = parse(
+            r#"{"closedWidth": 237, "closedHeight": 40.5, "glanceWidth": 512, "glanceHeight": 50}"#,
+        );
+        assert_eq!((s.closed_width, s.closed_height), (240.0, 40.5));
+        assert_eq!((s.glance_width, s.glance_height), (510.0, 50.0));
+        let s =
+            parse(r#"{"closedWidth": 1, "closedHeight": 1, "glanceWidth": 1, "glanceHeight": 1}"#);
+        assert_eq!((s.closed_width, s.closed_height), (120.0, 24.0));
+        assert_eq!((s.glance_width, s.glance_height), (280.0, 32.0));
+        let s = parse(
+            r#"{"closedWidth": 9999, "closedHeight": 9999, "glanceWidth": 9999, "glanceHeight": 9999}"#,
+        );
+        assert_eq!((s.closed_width, s.closed_height), (320.0, 48.0));
+        assert_eq!((s.glance_width, s.glance_height), (600.0, 64.0));
+        for bad in [r#""wide""#, "true", "null", "[1]"] {
+            let s = parse(&format!(
+                r#"{{"closedWidth": {bad}, "closedHeight": {bad}, "glanceWidth": {bad}, "glanceHeight": {bad}}}"#
+            ));
+            assert_eq!(s.sizes(), media::Sizes::default(), "{bad}");
+        }
+        // The glance stays taller than the closed island, whatever is set.
+        let s = parse(r#"{"closedHeight": 48, "glanceHeight": 32}"#);
+        assert_eq!(s.sizes().closed.1, 48.0);
+        assert_eq!(s.sizes().glance.1, 52.0);
+        assert_eq!(parse(r#"{"closedHeight": 36}"#).sizes().glance.1, 44.0);
         // A BOM (Notepad's UTF-8) is fine.
         assert!(parse("\u{feff}{\"lyrics\": true}").lyrics);
         // Too big to be a settings file.

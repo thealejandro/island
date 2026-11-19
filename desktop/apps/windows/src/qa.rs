@@ -253,8 +253,8 @@ pub fn frame(app: &App, i: usize) {
     let sf = &app.surfaces[i];
     let k = app.settings.island_scale;
     let peek_h = app.peek_unscaled_at(i).1 * k;
-    let a = alphas(sf, k, peek_h);
-    let o = openness(sf, k, peek_h);
+    let a = alphas(sf, app.sizes, k, peek_h);
+    let o = openness(sf, app.sizes, k, peek_h);
     let s = sf.scale;
     let placement = app.placement;
     let body = shape::body_rect(

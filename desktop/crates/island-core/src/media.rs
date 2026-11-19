@@ -326,18 +326,33 @@ pub fn lyrics_edge(top: f32, height: f32) -> f32 {
     above.min(below).clamp(0.0, 1.0)
 }
 
+// The closed island's and the glance's sizes are settings (before
+// `islandScale`); these are the defaults, and the limits.
+/// The closed island: 180 x 32.
+pub const CLOSED: (f32, f32) = (180.0, 32.0);
 // The glance on a new song (and, later, on each line of lyrics), 400 x 44.
 pub const PEEK: (f32, f32) = (400.0, 44.0);
 pub const PEEK_ART: Rect = rect(14.0, 8.0, 28.0, 28.0);
 pub const PEEK_TEXT: Rect = rect(54.0, 0.0, 300.0, 44.0);
 pub const PEEK_BARS: Rect = rect(368.0, 16.0, 18.0, 12.0);
 
+/// The settings' limits (DIPs): widths come in steps of 10.
+pub const CLOSED_WIDTH: (f32, f32) = (120.0, 320.0);
+pub const CLOSED_HEIGHT: (f32, f32) = (24.0, 48.0);
+pub const GLANCE_WIDTH: (f32, f32) = (280.0, 600.0);
+pub const GLANCE_HEIGHT: (f32, f32) = (32.0, 64.0);
+/// The glance is at least this much taller than the closed island, so the
+/// one can grow into the other.
+const GLANCE_TALLER: f32 = 4.0;
+
 /// The most the song's glance grows to for a long line, before the screen
 /// has its say (see [`fit_open_width`]).
 pub const PEEK_MOST: f32 = 760.0;
-/// Around the glance's line: the cover and its gap on the left, the gap,
-/// the bars and the edge on the right.
-const PEEK_CHROME: f32 = PEEK_TEXT.x + (PEEK.0 - PEEK_TEXT.x - PEEK_TEXT.width);
+
+/// A width setting: rounded to a step of 10, within its limits.
+pub fn size_width(w: f32, (least, most): (f32, f32)) -> f32 {
+    ((w / OPEN_WIDTH_STEP).round() * OPEN_WIDTH_STEP).clamp(least, most)
+}
 
 /// Rounds a width up to a step of 10, between `least` and `most`.
 fn fit(w: f32, least: f32, most: f32) -> f32 {
@@ -345,67 +360,183 @@ fn fit(w: f32, least: f32, most: f32) -> f32 {
     w.clamp(least, most.max(least))
 }
 
-/// The song's glance, as wide as its line (`text` DIPs) needs: never
-/// narrower than [`PEEK`], at most `most`.
-pub fn peek_width(text: f32, most: f32) -> f32 {
-    fit(text + PEEK_CHROME, PEEK.0, most)
+/// The sizes of the closed island and of the glance, before `islandScale`
+/// (width, height, DIPs), and the layouts that follow from them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Sizes {
+    pub closed: (f32, f32),
+    pub glance: (f32, f32),
 }
 
-/// Where the glance's cover, line and bars go at `width`.
-pub fn peek_parts(width: f32) -> (Rect, Rect, Rect) {
-    let text = rect(PEEK_TEXT.x, 0.0, width - PEEK_CHROME, PEEK.1);
-    let bars = rect(
-        width - (PEEK.0 - PEEK_BARS.x),
-        PEEK_BARS.y,
-        PEEK_BARS.width,
-        PEEK_BARS.height,
-    );
-    (PEEK_ART, text, bars)
+impl Default for Sizes {
+    fn default() -> Self {
+        Self {
+            closed: CLOSED,
+            glance: PEEK,
+        }
+    }
 }
 
-/// A one-line notice's glance (a device, the microphone, the focus's end)
-/// when its line is short: a touch narrower than the song's.
-pub const NOTICE_LEAST: f32 = 300.0;
-/// Around a notice's line: its icon and gap on the left, an edge on the
-/// right (it has no bars).
-const NOTICE_CHROME: f32 = PEEK_TEXT.x + 18.0;
-
-/// A one-line notice's glance, as wide as its line (`text` DIPs) needs:
-/// never narrower than [`NOTICE_LEAST`], at most `most`.
-pub fn notice_width(text: f32, most: f32) -> f32 {
-    fit(text + NOTICE_CHROME, NOTICE_LEAST, most)
-}
-
-/// Where a notice's line goes at `width` (its icon is at [`PEEK_ART`]).
-pub fn notice_text(width: f32) -> Rect {
-    rect(PEEK_TEXT.x, 0.0, width - NOTICE_CHROME, PEEK.1)
-}
-
-// The closed island, 180 x 32; while something plays, as wide as the
-// song's name needs, between these.
+// The closed island with music: as wide as the song's name needs, between
+// these. The cover is a side shorter than the island, its gap to the name
+// and the bars the same on both sides.
 pub const CLOSED_MEDIA_WIDTH: f32 = 220.0;
 pub const CLOSED_MEDIA_MOST: f32 = 420.0;
 pub const SMALL_ART: Rect = rect(12.0, 6.0, 20.0, 20.0);
-/// The name's gap to the cover and to the bars, the same on both sides.
-const CLOSED_GAP: f32 = 12.0;
-const BARS_W: f32 = 18.0;
-const CLOSED_CHROME: f32 = SMALL_ART.x + SMALL_ART.width + 2.0 * CLOSED_GAP + BARS_W + SMALL_ART.x;
 /// The closed island's text without music (the focus timer).
 pub const CLOSED_TEXT: Rect = rect(40.0, 0.0, 214.0, 32.0);
+const CLOSED_EDGE: f32 = 12.0;
+const CLOSED_GAP: f32 = 12.0;
+const CLOSED_ART_LESS: f32 = 12.0;
+const BARS_W: f32 = 18.0;
+const BARS_H: f32 = 12.0;
+/// How much wider the closed island is with music than without.
+const CLOSED_MEDIA_MORE: f32 = 40.0;
 
-/// The closed island while music plays, as wide as the song's name (`text`
-/// DIPs) needs.
-pub fn closed_width(text: f32) -> f32 {
-    fit(text + CLOSED_CHROME, CLOSED_MEDIA_WIDTH, CLOSED_MEDIA_MOST)
-}
+// The glance's cover sits at the edge; its line after a gap; the bars
+// between gaps and the edge.
+const PEEK_EDGE: f32 = 14.0;
+const PEEK_GAP: f32 = 12.0;
+const PEEK_BARS_GAP: f32 = 14.0;
+/// A notice has no bars: its line ends this far from the edge.
+const NOTICE_EDGE: f32 = 18.0;
+/// A one-line notice's glance (a device, the microphone, the focus's end)
+/// when its line is short, at the default sizes: as wide as a level's.
+pub const NOTICE_LEAST: f32 = 300.0;
+/// A level's glance is this share of the glance's width.
+const LEVEL_SHARE: f32 = 0.75;
 
-/// Where the closed island's cover, name and bars go at `width`: the name
-/// centered between the two, the same gap on each side.
-pub fn closed_parts(width: f32) -> (Rect, Rect, Rect) {
-    let x = SMALL_ART.x + SMALL_ART.width + CLOSED_GAP;
-    let text = rect(x, 0.0, width - CLOSED_CHROME, 32.0);
-    let bars = rect(width - SMALL_ART.x - BARS_W, 10.0, BARS_W, 12.0);
-    (SMALL_ART, text, bars)
+impl Sizes {
+    /// From the settings: widths in steps of 10, everything within its
+    /// limits, and the glance taller than the closed island.
+    pub fn new(closed_w: f32, closed_h: f32, glance_w: f32, glance_h: f32) -> Self {
+        let closed_h = closed_h.clamp(CLOSED_HEIGHT.0, CLOSED_HEIGHT.1);
+        Self {
+            closed: (size_width(closed_w, CLOSED_WIDTH), closed_h),
+            glance: (
+                size_width(glance_w, GLANCE_WIDTH),
+                glance_h
+                    .clamp(GLANCE_HEIGHT.0, GLANCE_HEIGHT.1)
+                    .max(closed_h + GLANCE_TALLER),
+            ),
+        }
+    }
+
+    /// The cover's side in the closed island, centered up and down.
+    fn closed_art(self) -> f32 {
+        self.closed.1 - CLOSED_ART_LESS
+    }
+
+    /// Around the closed island's name: the cover and its gap on the left,
+    /// the gap, the bars and the edge on the right.
+    fn closed_chrome(self) -> f32 {
+        CLOSED_EDGE + self.closed_art() + 2.0 * CLOSED_GAP + BARS_W + CLOSED_EDGE
+    }
+
+    /// The closed island while music plays, as wide as the song's name
+    /// (`text` DIPs) needs: a bit wider than without, up to a most.
+    pub fn closed_width(self, text: f32) -> f32 {
+        let least = self.closed.0 + CLOSED_MEDIA_MORE;
+        fit(
+            text + self.closed_chrome(),
+            least,
+            CLOSED_MEDIA_MOST.max(least),
+        )
+    }
+
+    /// Where the closed island's cover, name and bars go at `width`: the
+    /// name centered between the two, the same gap on each side.
+    pub fn closed_parts(self, width: f32) -> (Rect, Rect, Rect) {
+        let h = self.closed.1;
+        let side = self.closed_art();
+        let art = rect(CLOSED_EDGE, (h - side) / 2.0, side, side);
+        let x = art.x + side + CLOSED_GAP;
+        let text = rect(x, 0.0, width - self.closed_chrome(), h);
+        let bars = rect(
+            width - CLOSED_EDGE - BARS_W,
+            (h - BARS_H) / 2.0,
+            BARS_W,
+            BARS_H,
+        );
+        (art, text, bars)
+    }
+
+    /// The glance's cover, centered up and down.
+    fn peek_art(self) -> Rect {
+        let side = (self.glance.1 - 16.0).clamp(20.0, 36.0);
+        rect(PEEK_EDGE, (self.glance.1 - side) / 2.0, side, side)
+    }
+
+    /// Around the glance's line: the cover and its gap on the left, the gap,
+    /// the bars and the edge on the right.
+    fn peek_chrome(self) -> f32 {
+        let art = self.peek_art();
+        art.x + art.width + PEEK_GAP + PEEK_BARS_GAP + BARS_W + PEEK_EDGE
+    }
+
+    /// The song's glance, as wide as its line (`text` DIPs) needs: never
+    /// narrower than the setting, at most `most`.
+    pub fn peek_width(self, text: f32, most: f32) -> f32 {
+        fit(text + self.peek_chrome(), self.glance.0, most)
+    }
+
+    /// Where the glance's cover, line and bars go at `width`.
+    pub fn peek_parts(self, width: f32) -> (Rect, Rect, Rect) {
+        let h = self.glance.1;
+        let art = self.peek_art();
+        let text = rect(
+            art.x + art.width + PEEK_GAP,
+            0.0,
+            width - self.peek_chrome(),
+            h,
+        );
+        let bars = rect(
+            width - PEEK_EDGE - BARS_W,
+            (h - BARS_H) / 2.0,
+            BARS_W,
+            BARS_H,
+        );
+        (art, text, bars)
+    }
+
+    /// A level's glance on its own (the volume): narrower than the glance
+    /// and a touch shorter, but taller than the closed island.
+    pub fn level(self) -> (f32, f32) {
+        (
+            self.glance.0 * LEVEL_SHARE,
+            (self.glance.1 - 8.0).max(self.closed.1 + 2.0),
+        )
+    }
+
+    /// Around a notice's line: its icon and gap on the left, an edge on the
+    /// right.
+    fn notice_chrome(self) -> f32 {
+        let art = self.peek_art();
+        art.x + art.width + PEEK_GAP + NOTICE_EDGE
+    }
+
+    /// A one-line notice's glance, as wide as its line (`text` DIPs) needs:
+    /// never narrower than a level's glance (rounded up to a step of 10;
+    /// [`NOTICE_LEAST`] at the default sizes), at most `most`.
+    pub fn notice_width(self, text: f32, most: f32) -> f32 {
+        fit(
+            text + self.notice_chrome(),
+            (self.level().0 / OPEN_WIDTH_STEP).ceil() * OPEN_WIDTH_STEP,
+            most,
+        )
+    }
+
+    /// Where a notice's line goes at `width` (its icon is the glance's
+    /// cover, in [`Sizes::peek_parts`]).
+    pub fn notice_text(self, width: f32) -> Rect {
+        let art = self.peek_art();
+        rect(
+            art.x + art.width + PEEK_GAP,
+            0.0,
+            width - self.notice_chrome(),
+            self.glance.1,
+        )
+    }
 }
 
 // A view coming in grows from a touch smaller and drops into place from
@@ -689,47 +820,192 @@ mod tests {
 #[cfg(test)]
 mod width_tests {
     use super::*;
+    use crate::glance;
+
+    fn inside(r: Rect, (w, h): (f32, f32)) -> bool {
+        r.x >= 0.0 && r.y >= 0.0 && r.x + r.width <= w && r.y + r.height <= h
+    }
+
+    fn apart(a: Rect, b: Rect) -> bool {
+        a.x + a.width <= b.x
+            || b.x + b.width <= a.x
+            || a.y + a.height <= b.y
+            || b.y + b.height <= a.y
+    }
+
+    #[test]
+    fn the_default_sizes_are_what_they_were() {
+        let d = Sizes::default();
+        assert_eq!(d.closed, (180.0, 32.0));
+        assert_eq!(d.glance, PEEK);
+        assert_eq!(Sizes::new(180.0, 32.0, 400.0, 44.0), d);
+        assert_eq!(d.level(), glance::LEVEL);
+        assert_eq!(d.peek_parts(PEEK.0), (PEEK_ART, PEEK_TEXT, PEEK_BARS));
+        // The closed island with music: the cover, name and bars as before.
+        for w in [220.0, 260.0, 420.0] {
+            let (art, text, bars) = d.closed_parts(w);
+            assert_eq!(art, SMALL_ART);
+            assert_eq!(text, rect(44.0, 0.0, w - 86.0, 32.0));
+            assert_eq!(bars, rect(w - 30.0, 10.0, 18.0, 12.0));
+        }
+        assert_eq!(d.closed_width(0.0), CLOSED_MEDIA_WIDTH);
+        assert_eq!(d.closed_width(1000.0), CLOSED_MEDIA_MOST);
+        // The glance with a line wider than it is, and a notice.
+        let (art, text, bars) = d.peek_parts(560.0);
+        assert_eq!((art, text.x, text.width), (PEEK_ART, 54.0, 460.0));
+        assert_eq!(bars, rect(528.0, 16.0, 18.0, 12.0));
+        assert_eq!(d.notice_width(0.0, 760.0), NOTICE_LEAST);
+        assert_eq!(d.notice_text(380.0), rect(54.0, 0.0, 308.0, 44.0));
+    }
+
+    #[test]
+    fn sizes_are_clamped_and_the_glance_stays_taller() {
+        let s = Sizes::new(10.0, 5.0, 9000.0, 500.0);
+        assert_eq!(s.closed, (CLOSED_WIDTH.0, CLOSED_HEIGHT.0));
+        assert_eq!(s.glance, (GLANCE_WIDTH.1, GLANCE_HEIGHT.1));
+        let s = Sizes::new(9000.0, 500.0, 10.0, 5.0);
+        assert_eq!(s.closed, (CLOSED_WIDTH.1, CLOSED_HEIGHT.1));
+        assert_eq!(s.glance, (GLANCE_WIDTH.0, CLOSED_HEIGHT.1 + 4.0));
+        // Widths in steps of 10.
+        assert_eq!(Sizes::new(184.0, 32.0, 405.0, 44.0).closed.0, 180.0);
+        assert_eq!(Sizes::new(184.0, 32.0, 405.0, 44.0).glance.0, 410.0);
+        // The glance is only raised as far as it must be.
+        assert_eq!(Sizes::new(180.0, 40.0, 400.0, 36.0).glance.1, 44.0);
+        assert_eq!(Sizes::new(180.0, 40.0, 400.0, 50.0).glance.1, 50.0);
+    }
+
+    #[test]
+    fn every_size_lays_out_without_overlap() {
+        let corners = |(a, b): (f32, f32)| [a, (a + b) / 2.0, b];
+        for cw in corners(CLOSED_WIDTH) {
+            for ch in corners(CLOSED_HEIGHT) {
+                for gw in corners(GLANCE_WIDTH) {
+                    for gh in corners(GLANCE_HEIGHT) {
+                        let s = Sizes::new(cw, ch, gw, gh);
+                        let tag = format!("{s:?}");
+                        assert!(s.glance.1 >= s.closed.1 + 4.0, "{tag}");
+                        // The closed island with music, short and long names.
+                        for text in [0.0, 150.0, 5000.0] {
+                            let w = s.closed_width(text);
+                            assert!(w >= s.closed.0 + 40.0, "{tag}");
+                            let (art, name, bars) = s.closed_parts(w);
+                            let size = (w, s.closed.1);
+                            assert!(name.width > 0.0, "{tag}");
+                            for r in [art, name, bars] {
+                                assert!(inside(r, size), "{tag} {r:?}");
+                            }
+                            assert!(apart(art, name) && apart(name, bars), "{tag}");
+                            assert!(apart(art, bars), "{tag}");
+                        }
+                        // The song's glance, and a notice's.
+                        for text in [0.0, 150.0, 5000.0] {
+                            let w = s.peek_width(text, PEEK_MOST);
+                            assert!(w >= s.glance.0, "{tag}");
+                            let (art, name, bars) = s.peek_parts(w);
+                            let size = (w, s.glance.1);
+                            assert!(name.width > 0.0, "{tag}");
+                            for r in [art, name, bars] {
+                                assert!(inside(r, size), "{tag} {r:?}");
+                            }
+                            assert!(apart(art, name) && apart(name, bars), "{tag}");
+                            let w = s.notice_width(text, PEEK_MOST);
+                            let note = s.notice_text(w);
+                            assert!(note.width > 0.0, "{tag}");
+                            assert!(inside(note, (w, s.glance.1)), "{tag}");
+                            assert!(inside(art, (w, s.glance.1)), "{tag}");
+                            assert!(apart(art, note), "{tag}");
+                        }
+                        // A level's glance: between the closed island and
+                        // the glance in height.
+                        let level = s.level();
+                        assert!(level.1 > s.closed.1 && level.1 <= s.glance.1, "{tag}");
+                        let l = glance::level_layout(level);
+                        for r in [l.icon, l.bar, l.text] {
+                            assert!(inside(r, level), "{tag} {r:?}");
+                        }
+                        assert!(l.bar.width > 0.0, "{tag}");
+                        assert!(apart(l.icon, l.bar) && apart(l.bar, l.text), "{tag}");
+                        assert!(apart(l.icon, l.text), "{tag}");
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn the_glance_grows_with_its_line_up_to_the_most() {
-        assert_eq!(peek_width(0.0, 760.0), PEEK.0);
-        assert_eq!(peek_width(300.0, 760.0), PEEK.0);
-        assert_eq!(peek_width(455.0, 760.0), 560.0);
-        assert_eq!(peek_width(2000.0, 760.0), 760.0);
-        // A narrow screen's most never shrinks it below the usual.
-        assert_eq!(peek_width(2000.0, 300.0), PEEK.0);
-        let (art, text, bars) = peek_parts(560.0);
+        let d = Sizes::default();
+        assert_eq!(d.peek_width(0.0, 760.0), PEEK.0);
+        assert_eq!(d.peek_width(300.0, 760.0), PEEK.0);
+        assert_eq!(d.peek_width(455.0, 760.0), 560.0);
+        assert_eq!(d.peek_width(2000.0, 760.0), 760.0);
+        // A narrow screen's most never shrinks it below the setting.
+        assert_eq!(d.peek_width(2000.0, 300.0), PEEK.0);
+        let wide = Sizes::new(180.0, 32.0, 600.0, 44.0);
+        assert_eq!(wide.peek_width(0.0, 760.0), 600.0);
+        assert_eq!(wide.peek_width(2000.0, 500.0), 600.0);
+        let (art, text, bars) = d.peek_parts(560.0);
         assert_eq!(text.width, 460.0);
         assert!(art.x + art.width < text.x && text.x + text.width < bars.x);
         assert_eq!(
             bars.x + bars.width,
             560.0 - (PEEK.0 - PEEK_BARS.x - PEEK_BARS.width)
         );
-        assert_eq!(peek_parts(PEEK.0), (PEEK_ART, PEEK_TEXT, PEEK_BARS));
+    }
+
+    #[test]
+    fn a_taller_glance_has_a_bigger_cover_up_to_a_limit() {
+        let cover = |gh| Sizes::new(180.0, 24.0, 400.0, gh).peek_parts(400.0).0;
+        assert_eq!(cover(32.0), rect(14.0, 6.0, 20.0, 20.0));
+        assert_eq!(cover(52.0), rect(14.0, 8.0, 36.0, 36.0));
+        assert_eq!(cover(64.0), rect(14.0, 14.0, 36.0, 36.0));
     }
 
     #[test]
     fn a_notice_is_as_wide_as_its_line_needs() {
-        assert_eq!(notice_width(0.0, 760.0), NOTICE_LEAST);
-        assert_eq!(notice_width(200.0, 760.0), NOTICE_LEAST);
-        assert_eq!(notice_width(301.0, 760.0), 380.0);
-        assert_eq!(notice_width(2000.0, 760.0), 760.0);
-        assert_eq!(notice_width(2000.0, 200.0), NOTICE_LEAST);
-        let text = notice_text(380.0);
+        let d = Sizes::default();
+        assert_eq!(d.notice_width(0.0, 760.0), NOTICE_LEAST);
+        assert_eq!(d.notice_width(200.0, 760.0), NOTICE_LEAST);
+        assert_eq!(d.notice_width(301.0, 760.0), 380.0);
+        assert_eq!(d.notice_width(2000.0, 760.0), 760.0);
+        assert_eq!(d.notice_width(2000.0, 200.0), NOTICE_LEAST);
+        // A wider or narrower glance: as wide as its level's, at the least.
+        let wide = Sizes::new(180.0, 32.0, 560.0, 60.0);
+        assert_eq!(wide.notice_width(0.0, 760.0), 420.0);
+        let narrow = Sizes::new(120.0, 24.0, 290.0, 32.0);
+        assert_eq!(narrow.notice_width(0.0, 760.0), 220.0);
+        let text = d.notice_text(380.0);
         assert_eq!(text.width, 308.0);
         assert!(text.width >= 301.0);
         assert!(PEEK_ART.x + PEEK_ART.width < text.x);
+        // A narrower glance: its level's width, 210, whatever the screen.
+        let narrow = Sizes::new(180.0, 32.0, 280.0, 44.0);
+        assert_eq!(narrow.notice_width(0.0, 760.0), 210.0);
+        assert_eq!(narrow.notice_width(2000.0, 100.0), 210.0);
+        // At a taller glance the line sits further right: it has less room.
+        let tall = Sizes::new(180.0, 32.0, 400.0, 64.0);
+        assert!(tall.notice_text(380.0).width < 308.0);
+        assert_eq!(tall.notice_text(380.0).height, 64.0);
     }
 
     #[test]
     fn the_closed_island_fits_the_name_with_even_gaps() {
-        assert_eq!(closed_width(0.0), CLOSED_MEDIA_WIDTH);
-        assert_eq!(closed_width(1000.0), CLOSED_MEDIA_MOST);
-        let w = closed_width(181.0);
-        assert_eq!(w % 10.0, 0.0);
-        let (art, text, bars) = closed_parts(w);
-        assert!(text.width >= 181.0);
-        assert_eq!(text.x - (art.x + art.width), bars.x - (text.x + text.width));
-        assert_eq!(w - (bars.x + bars.width), art.x);
+        for s in [Sizes::default(), Sizes::new(120.0, 48.0, 400.0, 52.0)] {
+            assert_eq!(s.closed_width(0.0), s.closed.0 + 40.0);
+            assert_eq!(s.closed_width(1000.0), CLOSED_MEDIA_MOST);
+            let w = s.closed_width(181.0);
+            assert_eq!(w % 10.0, 0.0);
+            let (art, text, bars) = s.closed_parts(w);
+            assert!(text.width >= 181.0);
+            assert_eq!(text.x - (art.x + art.width), bars.x - (text.x + text.width));
+            assert_eq!(w - (bars.x + bars.width), art.x);
+            // The cover is centered up and down.
+            assert_eq!(art.y * 2.0 + art.height, s.closed.1);
+        }
+        // A wide closed island with music: wider, and past the usual most
+        // it still never gets narrower than its least.
+        let wide = Sizes::new(320.0, 32.0, 400.0, 44.0);
+        assert_eq!(wide.closed_width(0.0), 360.0);
+        assert_eq!(wide.closed_width(1000.0), CLOSED_MEDIA_MOST);
     }
 }

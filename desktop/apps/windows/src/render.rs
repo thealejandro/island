@@ -106,6 +106,8 @@ pub struct Scene<'a> {
     /// their text needs (DIPs).
     pub peek_width: f32,
     pub closed_width: f32,
+    /// The closed island's and the glance's sizes (DIPs, before `islandScale`).
+    pub sizes: layout::Sizes,
     /// How far the body is from its small size (closed or the glance it
     /// grows from, `peek_view`) to the open one: 0 to 1.
     pub openness: f32,
@@ -249,7 +251,6 @@ impl LyricsView<'_> {
 
 /// The open and closed layouts are drawn at their full size, centered in
 /// the body, so they don't reflow while it grows.
-const CLOSED_W: f32 = 180.0;
 /// The note that stands in for a missing cover is laid out in a box this
 /// big (DIPs) and scaled to the cover's size.
 const NOTE_BOX: f32 = 44.0;
@@ -1631,19 +1632,15 @@ impl Renderer {
             Some(Before::Line(line)) if !same_song => {
                 self.peek_song(s, Some(line), dx, old_dy, old_a, old_a)
             }
-            Some(Before::Line(line)) => self.peek_text(
-                &[(line.to_string(), false)],
-                s.peek_width,
-                dx,
-                old_dy,
-                old_a,
-            ),
+            Some(Before::Line(line)) => {
+                self.peek_text(&[(line.to_string(), false)], s, dx, old_dy, old_a)
+            }
             Some(Before::Song) if !same_song => self.peek_song(s, None, dx, old_dy, old_a, old_a),
             Some(Before::Song) => {
                 let spans = s
                     .track
                     .map_or(vec![], |t| s.song.spans(&t.title, &t.artist));
-                self.peek_text(&spans, s.peek_width, dx, old_dy, old_a);
+                self.peek_text(&spans, s, dx, old_dy, old_a);
             }
             None => {}
         }
@@ -1660,9 +1657,9 @@ impl Renderer {
         self.peek_song(s, line, dx, new_dy, new_a, art_a);
     }
 
-    fn peek_text(&mut self, spans: &[(String, bool)], width: f32, dx: f32, dy: f32, alpha: f32) {
+    fn peek_text(&mut self, spans: &[(String, bool)], s: &Scene, dx: f32, dy: f32, alpha: f32) {
         if alpha > 0.0 {
-            let r = lift(shift(layout::peek_parts(width).1, dx), dy);
+            let r = lift(shift(s.sizes.peek_parts(s.peek_width).1, dx), dy);
             self.song(spans, &self.text.peek, r, alpha);
         }
     }
@@ -1680,7 +1677,7 @@ impl Renderer {
     ) {
         let Some(t) = s.track else { return };
         if art_a > 0.0 {
-            let (art, _, bars) = layout::peek_parts(s.peek_width);
+            let (art, _, bars) = s.sizes.peek_parts(s.peek_width);
             self.draw_art(
                 t,
                 shift(art, dx),
@@ -1694,7 +1691,7 @@ impl Renderer {
             Some(l) => vec![(l.to_string(), false)],
             None => s.song.spans(&t.title, &t.artist),
         };
-        self.peek_text(&spans, s.peek_width, dx, dy, alpha);
+        self.peek_text(&spans, s, dx, dy, alpha);
     }
 
     fn peek_notice(&mut self, n: &Notice, s: &Scene, dx: f32, dy: f32, alpha: f32) {
@@ -1710,9 +1707,10 @@ impl Renderer {
         let Some(level) = n.level else {
             // (A level is laid out at the body's own size, without `dx`;
             // the body's is scaled, so it is read back into DIPs first.)
-            self.icon(n.icon, at(layout::PEEK_ART), 20.0, n.tint, alpha);
+            let art = s.sizes.peek_parts(s.peek_width).0;
+            self.icon(n.icon, at(art), art.height - 8.0, n.tint, alpha);
             let spans = notice_spans(n.title, n.detail);
-            let text = layout::notice_text(s.peek_width);
+            let text = s.sizes.notice_text(s.peek_width);
             self.song(&spans, &self.text.peek, at(text), alpha);
             return;
         };
@@ -1937,7 +1935,7 @@ impl Renderer {
         let Some(t) = s.track else {
             // Nothing playing: the focus timer, while a session is on.
             if let Some(time) = s.closed_timer {
-                let h = layout::CLOSED_TEXT.y * 2.0 + layout::CLOSED_TEXT.height;
+                let h = s.sizes.closed.1;
                 let icon = Rect {
                     x: dx + 18.0,
                     y: 0.0,
@@ -1948,14 +1946,14 @@ impl Renderer {
                 let text = Rect {
                     x: dx + 44.0,
                     y: 0.0,
-                    width: CLOSED_W - 62.0,
+                    width: s.sizes.closed.0 - 62.0,
                     height: h,
                 };
                 self.numbers(time, &self.text.closed, text, WHITE, INK * alpha);
             }
             return;
         };
-        let (art, text, bars) = layout::closed_parts(s.closed_width);
+        let (art, text, bars) = s.sizes.closed_parts(s.closed_width);
         self.draw_art(
             t,
             shift(art, dx),
@@ -2038,10 +2036,10 @@ impl Renderer {
                 return None;
             }
             let dx = (s.size.0 - s.peek_width) / 2.0;
-            scaled(layout::peek_parts(s.peek_width).0, dx, 7.0)
+            scaled(s.sizes.peek_parts(s.peek_width).0, dx, 7.0)
         } else {
             let dx = (s.size.0 - s.closed_width) / 2.0;
-            scaled(layout::closed_parts(s.closed_width).0, dx, 5.0)
+            scaled(s.sizes.closed_parts(s.closed_width).0, dx, 5.0)
         };
         // The player's cover where the open view, scaled to the body, has it.
         let fit = open_fit(s);
@@ -2293,7 +2291,7 @@ impl Renderer {
                     let w = if s.track.is_some() {
                         s.closed_width
                     } else {
-                        CLOSED_W
+                        s.sizes.closed.0
                     };
                     // The small views are drawn at islandScale: one transform
                     // about the top center, the layout itself untouched.

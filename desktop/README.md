@@ -109,6 +109,10 @@ that isn't valid JSON is ignored until it is fixed.
 | `openLyrics` | `true`, `false` | `true` |
 | `openWidth` | 480 to 960, in steps of 10, or `auto` | `auto` |
 | `islandScale` | 0.8 to 1.4 | `1.0` |
+| `closedWidth` | 120 to 320, in steps of 10 (the closed island's width, before `islandScale`; with music it is 40 wider, and more for a long name) | `180` |
+| `closedHeight` | 24 to 48 (the closed island's height, before `islandScale`) | `32` |
+| `glanceWidth` | 280 to 600, in steps of 10 (the glance's least width, before `islandScale`; a long song line widens it) | `400` |
+| `glanceHeight` | 32 to 64 (the glance's height, before `islandScale`; at least 4 more than `closedHeight`) | `44` |
 | `accent` | `system`, `white`, `theme`, or a color like `#ff8000` (the glances' levels and logo-less notifications; a color too dark to see on black is lightened to a 3:1 contrast) | `system` |
 | `islandColor` | `black` (like a notch), `theme`, or a color like `#1e2a3a` (one too light for the white text is darkened to a 4.5:1 contrast) | `black` |
 | `animations` | `system` (as Windows' "Animation effects"), `on`, `off` (no wobble, crossfades, ring or comet: the island goes straight to its size) | `system` |
@@ -159,6 +163,13 @@ what the player can spare; below 500 there is no room for one and only the
 player shows. On small or scaled-up
 screens the island takes at most 60 % of the screen's width (610 on a
 1024-wide one, 760 on a 1280 x 1024 square monitor), down to 480.
+
+`closedWidth`, `closedHeight`, `glanceWidth` and `glanceHeight` size the closed
+island and the glance in DIPs, before `islandScale` scales them. The cover,
+line and bars of the glance follow its height, and the volume's glance
+is derived from it (three quarters of its width, 8 less in height). Music
+still widens both for a long line, and notification toasts keep their own
+size.
 
 `islandScale` grows or shrinks the closed island and every glance (the
 song, the volume, Bluetooth, the microphone and camera, notifications) by
