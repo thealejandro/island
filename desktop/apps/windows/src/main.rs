@@ -5,6 +5,7 @@ mod banners;
 mod bars;
 mod battery;
 mod bluetooth;
+mod brightness;
 mod http;
 mod install;
 mod keys;
@@ -763,6 +764,10 @@ struct App {
     /// told.
     battery: Option<battery::Battery>,
     power: battery::Power,
+    /// The watch on the built-in screen's brightness, while that glance is
+    /// on, and what it last told.
+    brightness: Option<brightness::Brightness>,
+    brightness_watch: island_core::brightness::Watch,
     /// The watch on notifications, while that glance is on and Windows
     /// lets the island read them.
     notifications: Option<notifications::Notifications>,
@@ -1390,6 +1395,23 @@ impl App {
             ..Default::default()
         };
         self.notify(n, PEEK_MS);
+    }
+
+    /// The built-in screen's brightness, as told `idle_ms` after the last
+    /// input: a glance if it changed, and by the user's hand.
+    fn brightness_changed(&mut self, percent: u8, idle_ms: u32) {
+        if !self.brightness_watch.feed(percent) || !island_core::brightness::by_hand(idle_ms) {
+            return;
+        }
+        let n = Notice {
+            icon: island_core::icons::Icon::Brightness,
+            tint: render::WHITE,
+            title: self.texts.brightness.into(),
+            detail: format!("{percent} %"),
+            level: Some(f32::from(percent.min(100)) / 100.0),
+            ..Default::default()
+        };
+        self.notify(n, glance::LEVEL_MS);
     }
 
     /// The battery has news: a glance with the level.
@@ -2168,6 +2190,14 @@ impl App {
                 }
             }
         }
+        if s.brightness_glance != self.brightness.is_some() {
+            self.brightness = None;
+            if s.brightness_glance {
+                self.brightness = brightness::Brightness::start(self.anchor);
+                // The value Windows sends on registering is no news.
+                self.brightness_watch = Default::default();
+            }
+        }
         if s.notification_glance != self.notifications.is_some() {
             self.notifications = s
                 .notification_glance
@@ -2372,6 +2402,9 @@ impl App {
                     && let Some((note, level)) = self.power.change(c)
                 {
                     self.battery_note(note, level);
+                }
+                if let (Some(_), Some(p)) = (&self.brightness, brightness::Brightness::read(lp)) {
+                    self.brightness_changed(p, brightness::idle_ms());
                 }
             }
             WM_APP_NOTIFICATION => self.notified(),
@@ -3628,6 +3661,8 @@ fn main() -> Result<()> {
             bluetooth: None,
             battery: None,
             power: battery::Power::default(),
+            brightness: None,
+            brightness_watch: Default::default(),
             notifications: None,
             pulse: None,
             full_glance: false,

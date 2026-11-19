@@ -7,6 +7,7 @@
 
 pub mod battery;
 pub mod bluetooth;
+pub mod brightness;
 pub mod color;
 pub mod focus;
 pub mod glance;
