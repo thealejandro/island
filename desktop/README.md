@@ -126,6 +126,7 @@ that isn't valid JSON is ignored until it is fixed.
 | `hideWindowsFlyout` | `true`, `false` | `true` |
 | `privacyGlance` | `true`, `false` | `true` |
 | `bluetoothGlance` | `true`, `false` | `true` |
+| `batteryGlance` | `true`, `false` | `true` |
 | `notificationGlance` | `true`, `false` | `true` |
 | `notificationsInFullScreen` | `here` (over the app), `other` (on another screen's island instead), `hide` (not over it); `true` and `false` still mean `here` and `hide` | `here` |
 | `notificationSound` | `true`, `false` | `true` |
@@ -216,6 +217,12 @@ moment on their own) and 30 for a disconnection (Low Energy devices drop
 for a few seconds while idle and come back). Only paired devices are
 watched, so it never scans for new ones. `bluetoothGlance: false` turns it
 off.
+
+When the charger is plugged in or out the island glances at it with the
+level, again when the battery is fully charged, and with a warning in red at
+20 % and at 10 % while it runs down (they start over once it charges). It
+waits on Windows' own power notices, and a machine without a battery never
+shows any. `batteryGlance: false` turns it off.
 
 When a notification pops up, the island grows into a glance of its own,
 taller than the song's so the two never pass for each other: the app's

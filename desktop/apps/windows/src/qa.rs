@@ -15,6 +15,8 @@
 //! - `track "<title>" "<artist>"`, `notrack`: a song playing, or none.
 //! - `notice "<title>" "<detail>"`, `level <0-1>`, `toast "<app>" "<title>"
 //!   "<body>"`: a glance.
+//! - `battery <0-100> <0|1>`: the level and whether the charger is in, as a
+//!   power notice would tell (the first one is no news).
 //! - `open [i]`, `close [i]`: one island (or all) opens or closes.
 //! - `page home|focus`.
 //! - `wait <ms>`; `wait-rest [ms]`: until every island is still (checks it
@@ -133,6 +135,7 @@ pub fn from_args(args: &[String]) -> std::io::Result<bool> {
         "hideWindowsFlyout",
         "privacyGlance",
         "bluetoothGlance",
+        "batteryGlance",
         "notificationGlance",
         "updateCheck",
     ] {
@@ -510,6 +513,14 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
             },
             PEEK_MS,
         ),
+        // Like a power notice from Windows, but the values are made up.
+        "battery" => {
+            let level = arg_f(cmd, 1)?.clamp(0.0, 100.0) as u8;
+            let charging = arg_f(cmd, 2)? != 0.0;
+            if let Some((note, level)) = app.power.set(level, charging) {
+                app.battery_note(note, level);
+            }
+        }
         "level" => {
             let level = arg_f(cmd, 1)?.clamp(0.0, 1.0);
             app.notify(
