@@ -127,6 +127,7 @@ that isn't valid JSON is ignored until it is fixed.
 | `privacyGlance` | `true`, `false` | `true` |
 | `bluetoothGlance` | `true`, `false` | `true` |
 | `batteryGlance` | `true`, `false` | `true` |
+| `brightnessGlance` | `true`, `false` | `true` |
 | `notificationGlance` | `true`, `false` | `true` |
 | `notificationsInFullScreen` | `here` (over the app), `other` (on another screen's island instead), `hide` (not over it); `true` and `false` still mean `here` and `hide` | `here` |
 | `notificationSound` | `true`, `false` | `true` |
@@ -223,6 +224,15 @@ level, again when the battery is fully charged, and with a warning in red at
 20 % and at 10 % while it runs down (they start over once it charges). It
 waits on Windows' own power notices, and a machine without a battery never
 shows any. `batteryGlance: false` turns it off.
+
+When the brightness of the built-in screen of a laptop or tablet changes, the
+island shows a level like the volume's. Windows tells it on its own, and
+external monitors do not report it, so they never show one. Windows still
+shows its own brightness flyout too: the keys are handled by the firmware, so
+the island cannot take them over as it does the volume keys. A change
+with no key, click or touch in the 10 s before it (Windows dimming an idle
+screen, or following the room's light) shows nothing.
+`brightnessGlance: false` turns it off.
 
 When a notification pops up, the island grows into a glance of its own,
 taller than the song's so the two never pass for each other: the app's

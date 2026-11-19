@@ -158,6 +158,8 @@ pub struct Settings {
     /// A glance when charging starts or stops, at full charge, and when
     /// the battery runs low (20 % and 10 %).
     pub battery_glance: bool,
+    /// A glance when the built-in screen's brightness changes.
+    pub brightness_glance: bool,
     /// A glance when a notification shows: its app and title.
     pub notification_glance: bool,
     /// Where those glances go while an app is in full screen on a screen
@@ -217,6 +219,7 @@ impl Default for Settings {
             privacy_glance: true,
             bluetooth_glance: true,
             battery_glance: true,
+            brightness_glance: true,
             notification_glance: true,
             notifications_in_full_screen: FullScreen::Here,
             notification_sound: true,
@@ -267,6 +270,7 @@ pub const TEMPLATE: &str = r#"{
   "privacyGlance": true,
   "bluetoothGlance": true,
   "batteryGlance": true,
+  "brightnessGlance": true,
   "notificationGlance": true,
   "notificationsInFullScreen": "here",
   "notificationSound": true,
@@ -375,6 +379,7 @@ impl Settings {
             privacy_glance: flag("privacyGlance", d.privacy_glance),
             bluetooth_glance: flag("bluetoothGlance", d.bluetooth_glance),
             battery_glance: flag("batteryGlance", d.battery_glance),
+            brightness_glance: flag("brightnessGlance", d.brightness_glance),
             notification_glance: flag("notificationGlance", d.notification_glance),
             notifications_in_full_screen: o
                 .get("notificationsInFullScreen")
@@ -589,6 +594,8 @@ mod tests {
         assert!(!parse(r#"{"bluetoothGlance": false}"#).bluetooth_glance);
         assert!(!parse(r#"{"batteryGlance": false}"#).battery_glance);
         assert!(parse("{}").battery_glance);
+        assert!(!parse(r#"{"brightnessGlance": false}"#).brightness_glance);
+        assert!(parse("{}").brightness_glance);
         assert!(!parse(r#"{"notificationGlance": false}"#).notification_glance);
         let fs = |t: &str| parse(t).notifications_in_full_screen;
         assert_eq!(
