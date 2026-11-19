@@ -84,7 +84,6 @@ use windows::core::{Error, HSTRING, PCWSTR, Result, w};
 
 // Sizes in DIPs (1/96 inch); the springs run in DIPs too, so a DPI change
 // doesn't jolt the motion.
-const CLOSED: (f32, f32) = (180.0, 32.0);
 const OPEN: (f32, f32) = (layout::OPEN_WIDTH, pages::OPEN_HEIGHT);
 const RADIUS: f32 = 18.0;
 const EAR: f32 = 10.0;
@@ -459,8 +458,8 @@ impl Surface {
             monitor,
             scale,
             window: Rect::default(),
-            width: Spring::at(CLOSED.0),
-            height: Spring::at(CLOSED.1),
+            width: Spring::at(layout::CLOSED.0),
+            height: Spring::at(layout::CLOSED.1),
             open: false,
             peek_view: false,
             tracking: false,
@@ -486,11 +485,13 @@ impl Surface {
     }
 
     /// Places the window on its screen at that screen's scale.
-    fn place(&mut self, placement: Placement, open_width_setting: f32, k: f32) {
+    fn place(&mut self, placement: Placement, open_width_setting: f32, k: f32, sz: layout::Sizes) {
         // Small or scaled-up screens get a narrower open island.
         let screen = self.monitor.rect.width / self.scale;
         self.open_width = layout::fit_open_width(open_width_setting, screen);
-        self.peek_most = layout::fit_open_width(layout::PEEK_MOST, screen);
+        // The window always has room for the glance, at the least.
+        self.peek_most =
+            layout::fit_open_width(layout::PEEK_MOST.max(sz.glance.0), screen).max(sz.glance.0);
         let s = self.scale;
         // Hanging from the edge, like a notch, it goes on the screen's
         // edge; otherwise clear of a taskbar on top.
@@ -554,19 +555,23 @@ impl Surface {
 
 /// How open a body is, from the small view it grows from (the closed island
 /// or the glance, both at `islandScale`) to the open one: 0 to 1.
-fn openness(sf: &Surface, k: f32, peek_h: f32) -> f32 {
-    let small = if sf.peek_view { peek_h } else { CLOSED.1 * k };
+fn openness(sf: &Surface, sz: layout::Sizes, k: f32, peek_h: f32) -> f32 {
+    let small = if sf.peek_view {
+        peek_h
+    } else {
+        sz.closed.1 * k
+    };
     ((sf.height.value - small) / (OPEN.1 - small)).clamp(0.0, 1.0)
 }
 
 /// How visible the closed, glance and open contents are, from the body's
 /// height: each one fades as the body leaves its size.
-fn alphas(sf: &Surface, k: f32, peek_h: f32) -> [f32; 3] {
+fn alphas(sf: &Surface, sz: layout::Sizes, k: f32, peek_h: f32) -> [f32; 3] {
     let h = sf.height.value;
-    let closed_h = CLOSED.1 * k;
+    let closed_h = sz.closed.1 * k;
     // From the view it grows from: a tall glance (a notification's) isn't
     // part open, or the player would show, faint, behind it.
-    let open = openness(sf, k, peek_h);
+    let open = openness(sf, sz, k, peek_h);
     // The closed content leaves fast; the open one comes in once there
     // is room for it. It shrinks with the body (scaled to it), so
     // closing it can stay until the body is small, while the cover
@@ -586,7 +591,7 @@ fn alphas(sf: &Surface, k: f32, peek_h: f32) -> [f32; 3] {
         // taller glance (a notification's) is fully there by the song's
         // glance's height, so growing from that one never shows the
         // closed island in between; the body uncovers the rest.
-        let small_h = peek_h.min(layout::PEEK.1 * k);
+        let small_h = peek_h.min(sz.glance.1 * k);
         let grown = ((h - closed_h) / (small_h - closed_h)).clamp(0.0, 1.0);
         let peek = ((grown - 0.5) * 2.0).clamp(0.0, 1.0);
         let closed = ((0.5 - grown) * 2.0).clamp(0.0, 1.0);
@@ -604,18 +609,24 @@ fn alphas(sf: &Surface, k: f32, peek_h: f32) -> [f32; 3] {
 /// notice (a notification's or a level's); as wide as the line needs
 /// for the song (see `layout::peek_width`) or a one-line notice's
 /// (`layout::notice_width`), up to `most`.
-fn peek_unscaled(notice: Option<&Notice>, glance_on: bool, song_w: f32, most: f32) -> (f32, f32) {
+fn peek_unscaled(
+    notice: Option<&Notice>,
+    glance_on: bool,
+    song_w: f32,
+    most: f32,
+    sz: layout::Sizes,
+) -> (f32, f32) {
     let level = notice.is_some_and(|n| n.level.is_some());
     if let Some(n) = notice.filter(|n| n.toast) {
         island_core::notifications::size(!n.body.is_empty())
     } else if level && !glance_on {
-        glance::LEVEL
+        sz.level()
     } else if level || notice.is_none() {
         // Over the lyrics' glance a level takes that one's size.
-        (song_w, layout::PEEK.1)
+        (song_w, sz.glance.1)
     } else {
         let w = notice.map_or(0.0, |n| n.line_w);
-        (layout::notice_width(w, most), layout::PEEK.1)
+        (sz.notice_width(w, most), sz.glance.1)
     }
 }
 
@@ -623,12 +634,12 @@ fn peek_unscaled(notice: Option<&Notice>, glance_on: bool, song_w: f32, most: f3
 /// and at rest, `before` fades out as the new content comes in. (Growing
 /// or shrinking, the body's own move carries the change.) `peek_h` is the
 /// glance's height on screen now.
-fn swap_from(sf: &mut Surface, k: f32, peek_h: f32, before: Before) {
+fn swap_from(sf: &mut Surface, sz: layout::Sizes, k: f32, peek_h: f32, before: Before) {
     let at_rest = !sf.open
         && sf.peek_view
-        && sf.height.target > CLOSED.1 * k
+        && sf.height.target > sz.closed.1 * k
         && (sf.height.value - sf.height.target).abs() < 0.5
-        && alphas(sf, k, peek_h)[1] > 0.99;
+        && alphas(sf, sz, k, peek_h)[1] > 0.99;
     // Animations off: the new content is just there.
     if !at_rest || !motion() {
         return;
@@ -716,6 +727,8 @@ struct App {
     /// The closed island with music, as wide as the song's name needs
     /// ([`layout::closed_width`]); the same on every screen.
     closed_w: f32,
+    /// The closed island's and the glance's sizes, from the settings.
+    sizes: layout::Sizes,
     /// The open island's page: the one last chosen (while the app runs).
     page: Page,
     /// The page just left, and when: the two cross as the tabs change.
@@ -953,7 +966,7 @@ impl App {
                 self.open_width_setting,
                 self.settings.island_scale,
             );
-            self.surfaces[i].place(placement, setting, k);
+            self.surfaces[i].place(placement, setting, k, self.sizes);
         }
         self.fit_text();
         self.retarget_all();
@@ -972,8 +985,8 @@ impl App {
         let now = self.now_ms();
         let peek_u = self.peek_unscaled_at(i);
         let peek_h = peek_u.1 * k;
-        let alpha = alphas(&self.surfaces[i], k, peek_h);
-        let open_a = openness(&self.surfaces[i], k, peek_h);
+        let alpha = alphas(&self.surfaces[i], self.sizes, k, peek_h);
+        let open_a = openness(&self.surfaces[i], self.sizes, k, peek_h);
         let glance_on = self.glance();
         let scroll = self.lyric_scroll();
         let since = self
@@ -1121,6 +1134,7 @@ impl App {
             glance: glance_filled,
             peek_width: peek_u.0,
             closed_width: self.closed_w,
+            sizes: self.sizes,
             openness: open_a,
             peek_view: sf.peek_view,
             island_scale: k,
@@ -1280,7 +1294,7 @@ impl App {
                 // Only where it shows, and changing from what showed there.
                 if on && !was_muted {
                     let peek_h = self.peek_unscaled_at(i).1 * k;
-                    swap_from(&mut self.surfaces[i], k, peek_h, before.clone());
+                    swap_from(&mut self.surfaces[i], self.sizes, k, peek_h, before.clone());
                 }
             }
         }
@@ -1758,12 +1772,15 @@ impl App {
     /// The glance's size before `islandScale` on one island's screen, in
     /// DIPs.
     fn peek_unscaled_at(&self, i: usize) -> (f32, f32) {
-        let song_w = layout::peek_width(self.peek_w, self.surfaces[i].peek_most);
+        let song_w = self
+            .sizes
+            .peek_width(self.peek_w, self.surfaces[i].peek_most);
         peek_unscaled(
             self.notice_at(i),
             self.glance(),
             song_w,
             self.surfaces[i].peek_most,
+            self.sizes,
         )
     }
 
@@ -1777,7 +1794,7 @@ impl App {
         };
         let Some(t) = &self.track else { return };
         let name = self.song_text.spans(&t.title, &t.artist);
-        self.closed_w = layout::closed_width(r.text_width(&name, true));
+        self.closed_w = self.sizes.closed_width(r.text_width(&name, true));
         let line = match self.showing() {
             Before::Line(l) => vec![(l, false)],
             _ => name,
@@ -1849,7 +1866,7 @@ impl App {
                         continue;
                     }
                     let peek_h = self.peek_unscaled_at(i).1 * k;
-                    swap_from(&mut self.surfaces[i], k, peek_h, b.clone());
+                    swap_from(&mut self.surfaces[i], self.sizes, k, peek_h, b.clone());
                 }
             }
             let glance_on = self.glance();
@@ -1946,9 +1963,9 @@ impl App {
             peek_size
         } else if track_some {
             // Wide enough for the song's name.
-            (self.closed_w * k, CLOSED.1 * k)
+            (self.closed_w * k, self.sizes.closed.1 * k)
         } else {
-            (CLOSED.0 * k, CLOSED.1 * k)
+            (self.sizes.closed.0 * k, self.sizes.closed.1 * k)
         };
         if h != sf.height.target {
             sf.shrinking = h < sf.height.value;
@@ -2063,6 +2080,7 @@ impl App {
         self.timer.set_lengths(&self.settings.focus, &s.focus);
         self.settings = s;
         let s = self.settings.clone();
+        self.sizes = s.sizes();
         set_motion(s.animations);
         self.show_surfaces();
         self.texts = texts::texts(s.language, &self.locale);
@@ -2235,7 +2253,7 @@ impl App {
                             continue;
                         }
                         let peek_h = self.peek_unscaled_at(i).1 * k;
-                        swap_from(&mut self.surfaces[i], k, peek_h, b.clone());
+                        swap_from(&mut self.surfaces[i], self.sizes, k, peek_h, b.clone());
                     }
                 }
                 self.clear_notice();
@@ -2332,7 +2350,7 @@ impl App {
                             continue;
                         }
                         let peek_h = self.peek_unscaled_at(i).1 * k;
-                        swap_from(&mut self.surfaces[i], k, peek_h, b.clone());
+                        swap_from(&mut self.surfaces[i], self.sizes, k, peek_h, b.clone());
                     }
                 }
                 // Otherwise it stays while the islands shrink back (so it
@@ -3544,6 +3562,7 @@ fn main() -> Result<()> {
             // Fitted to the screen by the first layout.
             peek_w: 0.0,
             closed_w: layout::CLOSED_MEDIA_WIDTH,
+            sizes: defaults.sizes(),
             page: defaults.default_page,
             page_from: None,
             hot: None,
