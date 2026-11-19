@@ -168,6 +168,15 @@ fn lift(r: Rect, dy: f32) -> Rect {
     Rect { y: r.y + dy, ..r }
 }
 
+/// A one-line notice's line: its title, and its detail dimmer.
+pub fn notice_spans(title: &str, detail: &str) -> Vec<(String, bool)> {
+    let mut spans = vec![(title.to_string(), false)];
+    if !detail.is_empty() {
+        spans.push((format!("  {detail}"), true));
+    }
+    spans
+}
+
 /// What a glance tells: an icon in its color, a title, a dimmer detail
 /// and, for a level (the volume), a bar.
 #[derive(Clone, Copy)]
@@ -1702,11 +1711,9 @@ impl Renderer {
             // (A level is laid out at the body's own size, without `dx`;
             // the body's is scaled, so it is read back into DIPs first.)
             self.icon(n.icon, at(layout::PEEK_ART), 20.0, n.tint, alpha);
-            let mut spans = vec![(n.title.to_string(), false)];
-            if !n.detail.is_empty() {
-                spans.push((format!("  {}", n.detail), true));
-            }
-            self.song(&spans, &self.text.peek, at(layout::PEEK_TEXT), alpha);
+            let spans = notice_spans(n.title, n.detail);
+            let text = layout::notice_text(s.peek_width);
+            self.song(&spans, &self.text.peek, at(text), alpha);
             return;
         };
         // A level: the icon, the bar and the number, nothing else; muted,

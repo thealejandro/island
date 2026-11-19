@@ -363,6 +363,24 @@ pub fn peek_parts(width: f32) -> (Rect, Rect, Rect) {
     (PEEK_ART, text, bars)
 }
 
+/// A one-line notice's glance (a device, the microphone, the focus's end)
+/// when its line is short: a touch narrower than the song's.
+pub const NOTICE_LEAST: f32 = 300.0;
+/// Around a notice's line: its icon and gap on the left, an edge on the
+/// right (it has no bars).
+const NOTICE_CHROME: f32 = PEEK_TEXT.x + 18.0;
+
+/// A one-line notice's glance, as wide as its line (`text` DIPs) needs:
+/// never narrower than [`NOTICE_LEAST`], at most `most`.
+pub fn notice_width(text: f32, most: f32) -> f32 {
+    fit(text + NOTICE_CHROME, NOTICE_LEAST, most)
+}
+
+/// Where a notice's line goes at `width` (its icon is at [`PEEK_ART`]).
+pub fn notice_text(width: f32) -> Rect {
+    rect(PEEK_TEXT.x, 0.0, width - NOTICE_CHROME, PEEK.1)
+}
+
 // The closed island, 180 x 32; while something plays, as wide as the
 // song's name needs, between these.
 pub const CLOSED_MEDIA_WIDTH: f32 = 220.0;
@@ -688,6 +706,19 @@ mod width_tests {
             560.0 - (PEEK.0 - PEEK_BARS.x - PEEK_BARS.width)
         );
         assert_eq!(peek_parts(PEEK.0), (PEEK_ART, PEEK_TEXT, PEEK_BARS));
+    }
+
+    #[test]
+    fn a_notice_is_as_wide_as_its_line_needs() {
+        assert_eq!(notice_width(0.0, 760.0), NOTICE_LEAST);
+        assert_eq!(notice_width(200.0, 760.0), NOTICE_LEAST);
+        assert_eq!(notice_width(301.0, 760.0), 380.0);
+        assert_eq!(notice_width(2000.0, 760.0), 760.0);
+        assert_eq!(notice_width(2000.0, 200.0), NOTICE_LEAST);
+        let text = notice_text(380.0);
+        assert_eq!(text.width, 308.0);
+        assert!(text.width >= 301.0);
+        assert!(PEEK_ART.x + PEEK_ART.width < text.x);
     }
 
     #[test]
