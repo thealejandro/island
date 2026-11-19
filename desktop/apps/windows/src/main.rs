@@ -280,6 +280,8 @@ struct Notice {
     logo: Option<std::sync::Arc<Vec<u8>>>,
     /// The app that sent the notification, opened by a click on it.
     app_id: String,
+    /// A one-line notice's line, in DIPs, measured as it arrives.
+    line_w: f32,
 }
 
 /// The system's own "Notification.Default" sound: with the banners off
@@ -599,9 +601,10 @@ fn alphas(sf: &Surface, k: f32, peek_h: f32) -> [f32; 3] {
 }
 
 /// The glance's size before `islandScale`, in DIPs: a fixed one for a
-/// notice (a notification's, a level's, or the song's), as wide as the line
-/// needs for the song (see `layout::peek_width`).
-fn peek_unscaled(notice: Option<&Notice>, glance_on: bool, song_w: f32) -> (f32, f32) {
+/// notice (a notification's or a level's); as wide as the line needs
+/// for the song (see `layout::peek_width`) or a one-line notice's
+/// (`layout::notice_width`), up to `most`.
+fn peek_unscaled(notice: Option<&Notice>, glance_on: bool, song_w: f32, most: f32) -> (f32, f32) {
     let level = notice.is_some_and(|n| n.level.is_some());
     if let Some(n) = notice.filter(|n| n.toast) {
         island_core::notifications::size(!n.body.is_empty())
@@ -611,7 +614,8 @@ fn peek_unscaled(notice: Option<&Notice>, glance_on: bool, song_w: f32) -> (f32,
         // Over the lyrics' glance a level takes that one's size.
         (song_w, layout::PEEK.1)
     } else {
-        layout::PEEK
+        let w = notice.map_or(0.0, |n| n.line_w);
+        (layout::notice_width(w, most), layout::PEEK.1)
     }
 }
 
@@ -1255,7 +1259,15 @@ impl App {
     }
 
     /// A glance that tells something, for `ms` after its last change.
-    fn notify(&mut self, n: Notice, ms: u32) {
+    fn notify(&mut self, mut n: Notice, ms: u32) {
+        if !n.toast && n.level.is_none() {
+            let spans = render::notice_spans(&n.title, &n.detail);
+            n.line_w = self
+                .surfaces
+                .iter()
+                .find_map(|s| s.renderer.as_ref())
+                .map_or(0.0, |r| r.text_width(&spans, false));
+        }
         // A notice of the same kind (the volume again) just updates.
         let before = self.showing();
         if !matches!(&before, Before::Notice(b) if b.title == n.title && b.icon == n.icon) {
@@ -1747,7 +1759,12 @@ impl App {
     /// DIPs.
     fn peek_unscaled_at(&self, i: usize) -> (f32, f32) {
         let song_w = layout::peek_width(self.peek_w, self.surfaces[i].peek_most);
-        peek_unscaled(self.notice_at(i), self.glance(), song_w)
+        peek_unscaled(
+            self.notice_at(i),
+            self.glance(),
+            song_w,
+            self.surfaces[i].peek_most,
+        )
     }
 
     /// Measures the closed island's and the song's glance's text, for
