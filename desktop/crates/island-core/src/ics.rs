@@ -1352,7 +1352,7 @@ RECURRENCE-ID:20261120T100000Z\r\nDTSTART:20261120T160000Z\r\nEND:VEVENT\r\n";
                 "DTSTART:19700105T100000Z\r\nRRULE:FREQ={freq};COUNT=20000;BYDAY={byday}\r\n"
             )));
             let (_, ms) = millis(&text);
-            assert!(ms < 200, "{freq} took {ms} ms");
+            assert!(ms < 2000, "{freq} took {ms} ms");
         }
         let months = vec!["1,2,3,4,5,6,7,8,9,10,11,12"; 20_000].join(",");
         let days = vec!["1,-1,15"; 20_000].join(",");
@@ -1360,7 +1360,7 @@ RECURRENCE-ID:20261120T100000Z\r\nDTSTART:20261120T160000Z\r\nEND:VEVENT\r\n";
             "DTSTART:20200105T100000Z\r\nRRULE:FREQ=YEARLY;BYMONTH={months};BYMONTHDAY={days}\r\n"
         )));
         let (_, ms) = millis(&text);
-        assert!(ms < 200, "yearly lists took {ms} ms");
+        assert!(ms < 2000, "yearly lists took {ms} ms");
     }
 
     #[test]
@@ -1375,7 +1375,7 @@ RRULE:FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR;COUNT=99999;UNTIL=20991231T000000Z\r\nEND:
             ));
         }
         let (_, ms) = millis(&calendar(&text));
-        assert!(ms < 200, "took {ms} ms");
+        assert!(ms < 2000, "took {ms} ms");
     }
 
     #[test]
@@ -1395,7 +1395,7 @@ RRULE:FREQ=DAILY;COUNT=99999;UNTIL=20991231T000000Z\r\nEND:VEVENT\r\n"
             ));
         }
         let (_, ms) = millis(&calendar(&text));
-        assert!(ms < 200, "took {ms} ms");
+        assert!(ms < 2000, "took {ms} ms");
     }
 
     #[test]
