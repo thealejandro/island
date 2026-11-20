@@ -59,6 +59,71 @@ impl Style {
     }
 }
 
+/// The island's look (`islandStyle` in the settings), apart from where it
+/// sits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Form {
+    /// As it always was: hanging with ears at `top`, a rounded rectangle
+    /// elsewhere.
+    #[default]
+    Notch,
+    /// A capsule with a soft shadow, a small gap below the edge at `top`.
+    Pill,
+}
+
+impl Form {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "notch" => Some(Self::Notch),
+            "pill" => Some(Self::Pill),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Notch => "notch",
+            Self::Pill => "pill",
+        }
+    }
+}
+
+/// How far a pill sits below the screen's edge at `top`, in DIPs.
+pub const PILL_GAP: f32 = 6.0;
+/// The most a pill's corners round, in DIPs: a short body is a full capsule.
+pub const PILL_RADIUS_MOST: f32 = 28.0;
+/// How far a pill's shadow reaches past its body, in DIPs.
+pub const SHADOW_EXTENT: f32 = 16.0;
+/// How far the shadow falls below the body, in DIPs.
+pub const SHADOW_DROP: f32 = 4.0;
+/// How dark the shadow is, at the body's edge (0 to 1).
+pub const SHADOW_ALPHA: f32 = 0.30;
+
+/// A pill's corner radius for a body `height` px tall at `scale`: half the
+/// height, up to 28 DIPs. Only a function of the height, so it follows the
+/// spring that moves it.
+pub fn pill_radius(height: f32, scale: f32) -> f32 {
+    (height.max(0.0) / 2.0).min(PILL_RADIUS_MOST * scale)
+}
+
+/// Layer `i` of `n` of a soft shadow (0 is the outermost): how far it grows
+/// past the body, and its alpha. Drawn over each other, the layers add up to
+/// a darkness that falls off quadratically from `peak` at the body's edge to
+/// nothing `extent` away.
+pub fn shadow_layer(i: u32, n: u32, extent: f32, peak: f32) -> (f32, f32) {
+    let n = n.max(1) as f32;
+    let total = |j: f32| {
+        if j < 0.0 {
+            0.0
+        } else {
+            peak * ((j + 1.0) / n).powi(2)
+        }
+    };
+    let i = i as f32;
+    let (now, before) = (total(i), total(i - 1.0));
+    (extent * (1.0 - i / n), 1.0 - (1.0 - now) / (1.0 - before))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Point {
     pub x: f32,
@@ -191,8 +256,10 @@ pub fn floating_smooth(width: f32, height: f32, radius: f32) -> Outline {
 
 /// The body's outline in `style`, `width` x `height` px at `scale`,
 /// hanging from the edge (with `ear`) or not. `classic_radius` is the
-/// classic style's, in px.
+/// classic style's, in px. A pill is a capsule whatever the style.
+#[allow(clippy::too_many_arguments)]
 pub fn outline(
+    form: Form,
     style: Style,
     hangs: bool,
     width: f32,
@@ -201,6 +268,9 @@ pub fn outline(
     ear: f32,
     scale: f32,
 ) -> Outline {
+    if form == Form::Pill {
+        return floating(width, height, pill_radius(height, scale));
+    }
     match (style, hangs) {
         (Style::Classic, true) => hanging(width, height, classic_radius, ear),
         (Style::Classic, false) => floating(width, height, classic_radius),
@@ -299,6 +369,100 @@ pub fn body_rect(
         y: 0.0,
         width: full,
         height,
+    }
+}
+
+/// Where the island sits for a `placement` and a `form`, in px: the one
+/// place the notch's and the pill's geometry differ.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Frame {
+    pub placement: Placement,
+    pub form: Form,
+    /// The notch's ear.
+    pub ear: f32,
+    /// The distance from the screen's work area, at the placements that
+    /// float.
+    pub margin: f32,
+    /// A pill's gap below the screen's edge, at `top`.
+    pub gap: f32,
+    /// A pill's room for its shadow around the body: the reach and the drop.
+    pub shadow: f32,
+}
+
+impl Frame {
+    /// Hanging from the edge, with ears: only a notch at `top`.
+    pub fn hangs(&self) -> bool {
+        self.form == Form::Notch && self.placement.hangs()
+    }
+
+    /// The extra width the ears add on each side.
+    pub fn ear_room(&self) -> f32 {
+        if self.hangs() { self.ear } else { 0.0 }
+    }
+
+    /// A pill's room above the body, in whole px.
+    fn top(&self) -> f32 {
+        match (self.form, self.placement) {
+            (Form::Notch, _) => 0.0,
+            (Form::Pill, Placement::Top) => self.gap.round(),
+            (Form::Pill, _) => self.margin.round(),
+        }
+    }
+
+    /// A pill's room beside the body, at the corner placements' outer side
+    /// no more than the margin leaves, in whole px.
+    fn side(&self) -> f32 {
+        match self.form {
+            Form::Notch => 0.0,
+            Form::Pill => self.shadow.min(self.margin).round(),
+        }
+    }
+
+    /// Where the window goes on `area`, sized for the biggest body. A pill's
+    /// window starts at the area's top, with room for the shadow around.
+    pub fn window(&self, area: Rect, max_width: f32, max_height: f32) -> Rect {
+        if self.form == Form::Notch {
+            return window_rect(
+                self.placement,
+                area,
+                max_width,
+                max_height,
+                self.ear,
+                self.margin,
+            );
+        }
+        let width = max_width + 2.0 * self.shadow;
+        let x = match self.placement {
+            Placement::TopLeft => area.x + self.margin - self.side(),
+            Placement::TopRight => area.x + area.width - self.margin + self.side() - width,
+            _ => area.x + ((area.width - width) / 2.0).round(),
+        };
+        Rect {
+            x,
+            y: area.y,
+            width,
+            height: self.top() + max_height + self.shadow,
+        }
+    }
+
+    /// Where a body of `width` x `height` (without ears) sits in a window
+    /// of `window_width`; see [`body_rect`].
+    pub fn body(&self, window_width: f32, width: f32, height: f32, snap: bool) -> Rect {
+        if self.form == Form::Notch {
+            return body_rect(self.placement, window_width, width, height, self.ear, snap);
+        }
+        let x = match self.placement {
+            Placement::TopLeft => self.side(),
+            Placement::TopRight => window_width - self.side() - width,
+            _ if snap => ((window_width - width) / 2.0).round(),
+            _ => (window_width - width) / 2.0,
+        };
+        Rect {
+            x,
+            y: self.top(),
+            width,
+            height,
+        }
     }
 }
 
@@ -485,5 +649,202 @@ mod tests {
             assert_eq!(Placement::parse(s), Some(p));
         }
         assert_eq!(Placement::parse("bottom"), None);
+    }
+
+    const PLACEMENTS: [Placement; 4] = [
+        Placement::Top,
+        Placement::Floating,
+        Placement::TopLeft,
+        Placement::TopRight,
+    ];
+
+    fn frame(placement: Placement, form: Form) -> Frame {
+        Frame {
+            placement,
+            form,
+            ear: 10.0,
+            margin: 8.0,
+            gap: 6.0,
+            shadow: 20.0,
+        }
+    }
+
+    #[test]
+    fn form_names() {
+        for f in [Form::Notch, Form::Pill] {
+            assert_eq!(Form::parse(f.name()), Some(f));
+        }
+        assert_eq!(Form::parse("glass"), None);
+        assert_eq!(Form::default(), Form::Notch);
+    }
+
+    #[test]
+    fn only_a_notch_on_top_hangs() {
+        for p in PLACEMENTS {
+            for f in [Form::Notch, Form::Pill] {
+                let hangs = f == Form::Notch && p == Placement::Top;
+                let fr = frame(p, f);
+                assert_eq!(fr.hangs(), hangs, "{p:?} {f:?}");
+                assert_eq!(fr.ear_room(), if hangs { 10.0 } else { 0.0 });
+            }
+        }
+    }
+
+    #[test]
+    fn a_notch_frame_is_todays_geometry() {
+        for mon in [
+            Rect {
+                x: -1920.0,
+                y: 40.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1366.0,
+                height: 768.0,
+            },
+        ] {
+            for p in PLACEMENTS {
+                let fr = frame(p, Form::Notch);
+                assert_eq!(
+                    fr.window(mon, 560.0, 180.0),
+                    window_rect(p, mon, 560.0, 180.0, 10.0, 8.0)
+                );
+                for snap in [true, false] {
+                    assert_eq!(
+                        fr.body(580.0, 181.5, 32.0, snap),
+                        body_rect(p, 580.0, 181.5, 32.0, 10.0, snap)
+                    );
+                }
+                assert_eq!(fr.ear_room(), ear_room(p, 10.0));
+                assert_eq!(fr.hangs(), p.hangs());
+            }
+        }
+    }
+
+    #[test]
+    fn the_pill_radius_follows_the_height() {
+        for (h, s, r) in [
+            (32.0, 1.0, 16.0),
+            (44.0, 1.0, 22.0),
+            (56.0, 1.0, 28.0),
+            (180.0, 1.0, 28.0),
+            (64.0, 2.0, 32.0),
+            (400.0, 2.0, 56.0),
+            (-3.0, 1.0, 0.0),
+        ] {
+            assert_eq!(pill_radius(h, s), r, "{h} at {s}");
+        }
+        // Never jumps: a spring that moves the height moves it smoothly.
+        let mut h = 0.0;
+        while h < 300.0 {
+            let (a, b) = (pill_radius(h, 1.0), pill_radius(h + 0.5, 1.0));
+            assert!(b >= a && b - a <= 0.25 + 1e-4, "{h}");
+            h += 0.5;
+        }
+    }
+
+    #[test]
+    fn a_pill_is_a_closed_capsule() {
+        for style in [Style::Smooth, Style::Classic] {
+            let o = outline(Form::Pill, style, true, 180.0, 32.0, 18.0, 10.0, 1.0);
+            assert_eq!(o, floating(180.0, 32.0, 16.0));
+            for (w, h) in [(7.0, 5.0), (181.0, 33.0), (-3.0, -1.0)] {
+                let o = outline(Form::Pill, style, false, w, h, 18.0, 10.0, 1.25);
+                assert_eq!(end(&o), o.start);
+            }
+        }
+    }
+
+    #[test]
+    fn pill_windows_and_bodies_by_placement() {
+        let mon = Rect {
+            x: -1920.0,
+            y: 40.0,
+            width: 1920.0,
+            height: 1080.0,
+        };
+        for (ear, margin, gap, shadow) in [
+            (10.0, 8.0, 6.0, 20.0),
+            (12.5, 10.0, 7.5, 25.0),
+            (13.75, 11.0, 8.25, 27.5),
+        ] {
+            let max = (560.0, 180.0);
+            for p in PLACEMENTS {
+                let fr = Frame {
+                    placement: p,
+                    form: Form::Pill,
+                    ear,
+                    margin,
+                    gap,
+                    shadow,
+                };
+                let w = fr.window(mon, max.0, max.1);
+                // As the app places it: whole pixels.
+                let w = Rect {
+                    x: w.x.round(),
+                    y: w.y.round(),
+                    width: w.width.ceil(),
+                    height: w.height.ceil(),
+                };
+                let b = fr.body(w.width, max.0, max.1, true);
+                let notch = Frame {
+                    form: Form::Notch,
+                    ..fr
+                };
+                let n = notch.window(mon, max.0, max.1);
+                assert_eq!(w.y, mon.y, "{p:?}");
+                assert_eq!(b.y, b.y.round());
+                assert_eq!(b.x, b.x.round());
+                assert!(b.y + max.1 + shadow <= w.height + 1e-3);
+                assert!(w.x >= mon.x - 1e-3 && w.x + w.width <= mon.x + mon.width + 1e-3);
+                match p {
+                    Placement::Top => {
+                        assert_eq!(b.y, gap.round());
+                        assert_eq!(w.width, max.0 + 2.0 * shadow);
+                        assert!((w.x + b.x + max.0 / 2.0 - (mon.x + mon.width / 2.0)).abs() <= 1.5);
+                    }
+                    Placement::Floating => {
+                        // The body is where the notch's floating body is.
+                        assert!((w.y + b.y - n.y).abs() <= 1.0);
+                    }
+                    Placement::TopLeft => {
+                        assert!((w.x + b.x - (mon.x + margin)).abs() <= 1.5);
+                        assert!((w.y + b.y - n.y).abs() <= 1.0);
+                    }
+                    Placement::TopRight => {
+                        assert!((w.x + b.x + max.0 - (mon.x + mon.width - margin)).abs() <= 1.5);
+                        assert!((w.y + b.y - n.y).abs() <= 1.0);
+                    }
+                }
+            }
+        }
+        // The plain numbers.
+        let top = frame(Placement::Top, Form::Pill);
+        let w = top.window(mon, 560.0, 180.0);
+        assert_eq!((w.y, w.width, w.height), (40.0, 600.0, 206.0));
+        assert_eq!(top.body(w.width, 560.0, 180.0, true).y, 6.0);
+        assert_eq!(top.body(w.width, 560.0, 180.0, true).x, 20.0);
+    }
+
+    #[test]
+    fn shadow_layers_add_up() {
+        for n in [8, 16, 24] {
+            let (extent, peak) = (16.0, 0.30);
+            let mut seen = 1.0;
+            let mut last = f32::MAX;
+            for i in 0..n {
+                let (grow, a) = shadow_layer(i, n, extent, peak);
+                assert!(grow < last, "{i}/{n}");
+                assert!(a > 0.0 && a <= peak, "{i}/{n}: {a}");
+                last = grow;
+                seen *= 1.0 - a;
+            }
+            assert!((last - extent / n as f32).abs() < 1e-4);
+            assert!((shadow_layer(0, n, extent, peak).0 - extent).abs() < 1e-4);
+            assert!((1.0 - seen - peak).abs() < 1e-4, "{n}: {}", 1.0 - seen);
+        }
     }
 }

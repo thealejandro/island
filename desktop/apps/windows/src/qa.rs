@@ -9,7 +9,7 @@
 //! One command per line (`#` starts a comment; quotes group words):
 //!
 //! - `set <key> <json>`: a setting, as in settings.json (`set placement
-//!   "floating"`, `set islandScale 1.4`).
+//!   "floating"`, `set islandScale 1.4`, `set islandStyle "pill"`).
 //! - `scale <n>`: every screen at that scale (DIPs to px).
 //! - `slow <n>`: the springs run `n` times slower.
 //! - `track "<title>" "<artist>"`, `notrack`: a song playing, or none.
@@ -265,12 +265,10 @@ pub fn frame(app: &App, i: usize) {
     let o = openness(sf, app.sizes, k, peek_h);
     let s = sf.scale;
     let placement = app.placement;
-    let body = shape::body_rect(
-        placement,
+    let body = app.frame_at(i).body(
         sf.window.width,
         sf.width.value * s,
         sf.height.value * s,
-        EAR * s,
         sf.width.is_settled(),
     );
     let film = QA.with_borrow_mut(|q| {
@@ -302,10 +300,14 @@ pub fn frame(app: &App, i: usize) {
             sf.shrinking as u8,
         );
         // 1: the body fits its window, every frame.
-        if body.x < -0.5 || body.x + body.width > w.width + 0.5 || body.height > w.height + 0.5 {
+        if body.x < -0.5
+            || body.x + body.width > w.width + 0.5
+            || body.y < -0.5
+            || body.y + body.height > w.height + 0.5
+        {
             q.fail(format!(
-                "1 cuerpo fuera de la ventana: isla {i}, t {t:.0} ms, cuerpo x {:.1} {:.1}x{:.1} px, ventana {}x{} px",
-                body.x, body.width, body.height, w.width, w.height
+                "1 cuerpo fuera de la ventana: isla {i}, t {t:.0} ms, cuerpo x {:.1} y {:.1} {:.1}x{:.1} px, ventana {}x{} px",
+                body.x, body.y, body.width, body.height, w.width, w.height
             ));
         }
         // 6: closing never dips under where it stops.
@@ -841,14 +843,18 @@ fn shoot(app: &App, i: usize, name: &str) {
         return;
     };
     let s = sf.scale;
-    let body = shape::body_rect(
-        app.placement,
+    let body = app.frame_at(i).body(
         sf.window.width,
         sf.width.value * s,
         sf.height.value * s,
-        EAR * s,
         sf.width.is_settled(),
     );
+    // A pill's shadow is its own window of the island's rect: the screen
+    // capture takes it in, so it is part of the allowed margin here.
+    let shadow = match app.settings.island_style {
+        shape::Form::Pill => (shape::SHADOW_EXTENT + shape::SHADOW_DROP) * s,
+        shape::Form::Notch => 0.0,
+    };
     QA.with_borrow_mut(|q| {
         let Some(q) = q.as_mut() else { return };
         let path = q.out.join(format!("{name}.png"));
@@ -864,8 +870,13 @@ fn shoot(app: &App, i: usize, name: &str) {
             ));
             return;
         }
-        let m = q.margin * s;
-        let (l, r, b) = (body.x - m, body.x + body.width + m, body.height + m);
+        let m = q.margin * s + shadow;
+        let (t, l, r, b) = (
+            body.y - m,
+            body.x - m,
+            body.x + body.width + m,
+            body.y + body.height + m,
+        );
         let (mut outside, mut far, mut at) = (0u32, 0.0f32, (0, 0));
         for y in 0..g.h {
             for x in 0..g.w {
@@ -877,7 +888,7 @@ fn shoot(app: &App, i: usize, name: &str) {
                     continue;
                 }
                 let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
-                let dist = (l - fx).max(fx - r).max(fy - b);
+                let dist = (l - fx).max(fx - r).max(fy - b).max(t - fy);
                 if dist > 0.0 {
                     outside += 1;
                     if dist >= far {

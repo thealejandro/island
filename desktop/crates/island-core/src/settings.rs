@@ -13,7 +13,7 @@ use crate::focus::Lengths;
 use crate::media::{self, SongText, TextAlign};
 use crate::monitor::{FullScreen, GlanceScreen, MonitorChoice, Pick};
 use crate::pages::Page;
-use crate::shape::{Placement, Style};
+use crate::shape::{Form, Placement, Style};
 
 /// Bigger than any real settings file: anything past it is not read.
 pub const MAX_FILE: usize = 64 * 1024;
@@ -141,6 +141,8 @@ pub struct Settings {
     pub placement: Placement,
     /// The silhouette's corners: smooth (Apple's) or classic.
     pub shape: Style,
+    /// The island's look: a notch (as it was) or a pill.
+    pub island_style: Form,
     pub monitor: MonitorChoice,
     /// Where the glances that tell something show (see [`GlanceScreen`]).
     pub glance_screen: GlanceScreen,
@@ -223,6 +225,7 @@ impl Default for Settings {
             language: Language::default(),
             placement: Placement::default(),
             shape: Style::default(),
+            island_style: Form::default(),
             monitor: MonitorChoice::default(),
             glance_screen: GlanceScreen::All,
             text_align: TextAlign::default(),
@@ -265,6 +268,7 @@ pub const TEMPLATE: &str = r#"{
   "language": "",
   "placement": "top",
   "shape": "smooth",
+  "islandStyle": "notch",
   "monitor": "primary",
   "glanceScreen": "all",
   "textAlign": "center",
@@ -350,6 +354,9 @@ impl Settings {
                 .and_then(Placement::parse)
                 .unwrap_or(d.placement),
             shape: text("shape").and_then(Style::parse).unwrap_or(d.shape),
+            island_style: text("islandStyle")
+                .and_then(Form::parse)
+                .unwrap_or(d.island_style),
             // A screen's number may come as a number or as text; "all" or
             // a list ([1, 3] in JSON, "1,3" as text) puts an island on each.
             // A list may name screens by their device id too.
@@ -836,6 +843,22 @@ mod tests {
         assert_eq!(parse(r#"{"shape": "classic"}"#).shape, Style::Classic);
         assert_eq!(parse(r#"{"shape": "wavy"}"#).shape, Style::Smooth);
         assert_eq!(parse(TEMPLATE).shape, Style::Smooth);
+    }
+
+    #[test]
+    fn island_style_by_name() {
+        assert_eq!(parse(r#"{"islandStyle": "pill"}"#).island_style, Form::Pill);
+        assert_eq!(
+            parse(r#"{"islandStyle": "glass"}"#).island_style,
+            Form::Notch
+        );
+        assert_eq!(parse(TEMPLATE).island_style, Form::Notch);
+        // Apart from the placement.
+        let s = parse(r#"{"placement": "floating"}"#);
+        assert_eq!(
+            (s.placement, s.island_style),
+            (Placement::Floating, Form::Notch)
+        );
     }
 
     #[test]
