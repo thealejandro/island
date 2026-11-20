@@ -100,7 +100,7 @@ that isn't valid JSON is ignored until it is fixed.
 | --- | --- | --- |
 | `language` | `""` (the system's), `en`, `es` | `""` |
 | `placement` | `top`, `floating`, `top-left`, `top-right` | `top` |
-| `shape` | `smooth` (continuous corners, rounder when open), `classic` | `smooth` |
+| `shape` | `smooth` (continuous corners, half the body's height up to 36: closed it is a capsule), `classic` (circular corners of a fixed 24) | `smooth` |
 | `islandStyle` | `notch` (hangs from the edge with ears at `top`; a rounded rectangle at the other placements, as before), `pill` (a capsule with a soft shadow, a small gap below the edge at `top`; `shape` doesn't apply) | `notch` |
 | `monitor` | `primary`, a screen's number counted left to right, `all`, or a list of screens like `[1, 3]` (`1,3` from `--monitor`) | `primary` |
 | `glanceScreen` | `all`, `active` (a notification's glance comes out only on the island of the screen being looked at, the one with the window in front; the song and lyrics stay on all) | `all` |

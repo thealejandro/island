@@ -266,8 +266,13 @@ fn bubble_now(app: &App, i: usize, body: Rect) -> Option<Rect> {
     let t = (sf.bubble.value / (activity::BUBBLE_GAP + bw)).clamp(0.0, 1.0);
     let s = sf.scale;
     (t > 0.0).then(|| {
-        app.frame_at(i)
-            .bubble(body, bw * s, bh * s, activity::BUBBLE_GAP * s, t)
+        app.frame_at(i).bubble(
+            body,
+            (bw * s).round(),
+            (bh * s).round(),
+            (activity::BUBBLE_GAP * s).round(),
+            t,
+        )
     })
 }
 
@@ -281,12 +286,10 @@ pub fn frame(app: &App, i: usize) {
     let o = openness(sf, app.sizes, k, peek_h);
     let s = sf.scale;
     let placement = app.placement;
-    let body = app.frame_at(i).body(
-        sf.window.width,
-        sf.width.value * s,
-        sf.height.value * s,
-        sf.width.is_settled(),
-    );
+    let (bw, bh) = sf.body_px();
+    let body = app
+        .frame_at(i)
+        .body(sf.window.width, bw, bh, sf.width.is_settled());
     let film = QA.with_borrow_mut(|q| {
         let q = q.as_mut()?;
         q.frames += 1;
@@ -889,13 +892,14 @@ fn shoot(app: &App, i: usize, name: &str) {
         return;
     };
     let s = sf.scale;
-    let body = app.frame_at(i).body(
-        sf.window.width,
-        sf.width.value * s,
-        sf.height.value * s,
-        sf.width.is_settled(),
-    );
+    let (bw, bh) = sf.body_px();
+    let body = app
+        .frame_at(i)
+        .body(sf.window.width, bw, bh, sf.width.is_settled());
     let bubble = bubble_now(app, i, body);
+    let frame = app.frame_at(i);
+    let (hangs, ear) = (frame.hangs(), frame.ear);
+    let at_rest = sf.width.is_settled() && sf.height.is_settled();
     // A pill's shadow is its own window of the island's rect: the screen
     // capture takes it in, so it is part of the allowed margin here.
     let shadow = match app.settings.island_style {
@@ -916,6 +920,31 @@ fn shoot(app: &App, i: usize, name: &str) {
                 "{name}: el fondo es de otra ventana; repetir «background»"
             ));
             return;
+        }
+        // 7: a hanging island's ears reach the screen's edge: the window's
+        // region doesn't cut them (a pixel at their top, inside the ear, is
+        // drawn where the background isn't dark).
+        let mut cut = Vec::new();
+        let mut skipped = false;
+        if hangs && at_rest && bg.x == g.x {
+            for x in [body.x + ear - 1.0, body.x + body.width - ear] {
+                let p = (x.max(0.0) as u32).min(g.w as u32 - 1) as usize * 4;
+                let bg_sum: i32 = (0..3).map(|c| bg.bgra[p + c] as i32).sum();
+                if bg_sum < 3 * DRAWN {
+                    skipped = true;
+                    continue;
+                }
+                let d: i32 = (0..3)
+                    .map(|c| (g.bgra[p + c] as i32 - bg.bgra[p + c] as i32).abs())
+                    .sum();
+                if d < DRAWN {
+                    cut.push(format!(
+                        "7 orejas cortadas en {name}: sin dibujo en x {x:.0}, y 0 (cuerpo x {:.1}–{:.1})",
+                        body.x,
+                        body.x + body.width
+                    ));
+                }
+            }
         }
         let m = q.margin * s + shadow;
         let (t, l, r, b) = (
@@ -948,6 +977,12 @@ fn shoot(app: &App, i: usize, name: &str) {
                     }
                 }
             }
+        }
+        if skipped {
+            q.notes.push(format!("7 sin comprobar (fondo oscuro) en {name}"));
+        }
+        for m in cut {
+            q.fail(m);
         }
         if outside > 0 {
             q.fail(format!(

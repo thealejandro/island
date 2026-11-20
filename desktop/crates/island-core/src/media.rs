@@ -336,6 +336,12 @@ pub const PEEK_ART: Rect = rect(14.0, 8.0, 28.0, 28.0);
 pub const PEEK_TEXT: Rect = rect(54.0, 0.0, 300.0, 44.0);
 pub const PEEK_BARS: Rect = rect(368.0, 16.0, 18.0, 12.0);
 
+/// The cover's corner radius for a cover `side` wide, in whatever unit the
+/// side is in: a quarter of it, up to 18 (the open view's 88 wide).
+pub fn art_radius(side: f32) -> f32 {
+    (side * 0.25).min(18.0)
+}
+
 /// The settings' limits (DIPs): widths come in steps of 10.
 pub const CLOSED_WIDTH: (f32, f32) = (120.0, 320.0);
 pub const CLOSED_HEIGHT: (f32, f32) = (24.0, 48.0);
@@ -831,6 +837,13 @@ mod width_tests {
             || b.x + b.width <= a.x
             || a.y + a.height <= b.y
             || b.y + b.height <= a.y
+    }
+
+    #[test]
+    fn the_cover_rounds_a_quarter_of_its_side() {
+        for (side, r) in [(20.0, 5.0), (28.0, 7.0), (36.0, 9.0), (88.0, 18.0)] {
+            assert_eq!(art_radius(side), r, "{side}");
+        }
     }
 
     #[test]
