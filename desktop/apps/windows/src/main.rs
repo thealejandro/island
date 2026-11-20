@@ -79,12 +79,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IDC_ARROW, IsWindow, KillTimer, LoadCursorW, MA_NOACTIVATE, MONITORINFOF_PRIMARY, MSG,
     PBT_POWERSETTINGCHANGE, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW,
     SPI_SETWORKAREA, SW_SHOW, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, TranslateMessage, WM_ACTIVATE, WM_APP,
-    WM_CLOSE, WM_COPYDATA, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_DWMCOLORIZATIONCOLORCHANGED, WM_ENDSESSION, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_POWERBROADCAST, WM_RBUTTONUP,
-    WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    SetForegroundWindow, SetLayeredWindowAttributes, SetTimer, SetWindowPos, ShowWindow,
+    TranslateMessage, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COPYDATA, WM_DESTROY, WM_DISPLAYCHANGE,
+    WM_DPICHANGED, WM_DWMCOLORIZATIONCOLORCHANGED, WM_ENDSESSION, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_POWERBROADCAST, WM_RBUTTONUP,
+    WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    WS_VISIBLE,
 };
 use windows::core::BOOL;
 use windows::core::{Error, HSTRING, PCWSTR, Result, w};
@@ -95,6 +96,18 @@ const OPEN: (f32, f32) = (layout::OPEN_WIDTH, pages::OPEN_HEIGHT);
 const RADIUS: f32 = 18.0;
 const EAR: f32 = 10.0;
 const MARGIN: f32 = 8.0;
+
+/// Where the island sits for a placement and a look, at a screen's `s`.
+fn frame_for(placement: Placement, form: shape::Form, s: f32) -> shape::Frame {
+    shape::Frame {
+        placement,
+        form,
+        ear: EAR * s,
+        margin: MARGIN * s,
+        gap: shape::PILL_GAP * s,
+        shadow: (shape::SHADOW_EXTENT + shape::SHADOW_DROP) * s,
+    }
+}
 const HOVER_DELAY_MS: u32 = 120;
 
 const HOVER_TIMER: usize = 1;
@@ -441,6 +454,16 @@ struct Surface {
     /// The notice showing isn't for this island (`glanceScreen: active`,
     /// another screen's): it goes on with the song as if there were none.
     muted: bool,
+    /// A pill's shadow: a click-through window under the island, of its
+    /// size (the window's region would cut a shadow off). Only while the
+    /// style is pill.
+    shadow_hwnd: Option<HWND>,
+}
+
+impl Drop for Surface {
+    fn drop(&mut self) {
+        self.sync_shadow(false);
+    }
 }
 
 impl Surface {
@@ -488,6 +511,7 @@ impl Surface {
             swap: None,
             full: false,
             muted: false,
+            shadow_hwnd: None,
         })
     }
 
@@ -497,8 +521,92 @@ impl Surface {
         self.open_width.max(self.peek_most * k)
     }
 
+    /// Makes the shadow window if `pill` and there is none, or ends it if
+    /// not. True when it was just made.
+    fn sync_shadow(&mut self, pill: bool) -> bool {
+        use windows::Win32::UI::WindowsAndMessaging::{IsWindowVisible, LWA_ALPHA, SW_SHOWNA};
+        if !pill {
+            if let Some(h) = self.shadow_hwnd.take() {
+                // Its target goes before the window.
+                if let Some(r) = &mut self.renderer {
+                    let _ = r.set_shadow_window(None);
+                }
+                unsafe {
+                    let _ = DestroyWindow(h);
+                }
+            }
+            return false;
+        }
+        if self.shadow_hwnd.is_some() {
+            return false;
+        }
+        let h = unsafe {
+            CreateWindowExW(
+                WS_EX_TOOLWINDOW
+                    | WS_EX_TOPMOST
+                    | WS_EX_NOACTIVATE
+                    | WS_EX_NOREDIRECTIONBITMAP
+                    | WS_EX_LAYERED
+                    | WS_EX_TRANSPARENT,
+                w!("Static"),
+                w!("Island shadow"),
+                WS_POPUP,
+                0,
+                0,
+                1,
+                1,
+                None,
+                None,
+                GetModuleHandleW(None).ok().map(|h| h.into()),
+                None,
+            )
+        };
+        let Ok(h) = h else {
+            return false;
+        };
+        unsafe {
+            // A layered window shows nothing until it has its attributes.
+            let _ = SetLayeredWindowAttributes(h, Default::default(), 255, LWA_ALPHA);
+        }
+        let attached = match &mut self.renderer {
+            Some(r) => r.set_shadow_window(Some(h)).is_ok(),
+            None => false,
+        };
+        if !attached {
+            unsafe {
+                let _ = DestroyWindow(h);
+            }
+            return false;
+        }
+        self.shadow_hwnd = Some(h);
+        unsafe {
+            if IsWindowVisible(self.hwnd).as_bool() {
+                let _ = ShowWindow(h, SW_SHOWNA);
+            }
+        }
+        true
+    }
+
+    /// Puts the shadow window on the island's rect, just below it.
+    fn put_shadow(&self) {
+        if let Some(h) = self.shadow_hwnd {
+            let r = self.window;
+            unsafe {
+                let _ = SetWindowPos(
+                    h,
+                    Some(self.hwnd),
+                    r.x as i32,
+                    r.y as i32,
+                    r.width as i32,
+                    r.height as i32,
+                    SWP_NOACTIVATE,
+                );
+            }
+        }
+    }
+
     /// Places the window on its screen at that screen's scale.
-    fn place(&mut self, placement: Placement, open_width_setting: f32, k: f32, sz: layout::Sizes) {
+    fn place(&mut self, f: shape::Frame, open_width_setting: f32, k: f32, sz: layout::Sizes) {
         // Small or scaled-up screens get a narrower open island.
         let screen = self.monitor.rect.width / self.scale;
         self.open_width = layout::fit_open_width(open_width_setting, screen);
@@ -506,20 +614,18 @@ impl Surface {
         self.peek_most =
             layout::fit_open_width(layout::PEEK_MOST.max(sz.glance.0), screen).max(sz.glance.0);
         let s = self.scale;
-        // Hanging from the edge, like a notch, it goes on the screen's
-        // edge; otherwise clear of a taskbar on top.
-        let area = if placement.hangs() {
+        // At the top, a notch hanging from the edge or a pill just below
+        // it, it goes on the screen's edge; otherwise clear of a taskbar
+        // on top.
+        let area = if f.placement == Placement::Top {
             self.monitor.rect
         } else {
             self.monitor.work
         };
-        let r = shape::window_rect(
-            placement,
+        let r = f.window(
             area,
             (self.widest(k) + 2.0 * spring::ROOM_WIDTH) * s,
             (OPEN.1 + spring::ROOM_HEIGHT) * s,
-            EAR * s,
-            MARGIN * s,
         );
         let r = Rect {
             x: r.x.round(),
@@ -527,6 +633,7 @@ impl Surface {
             width: r.width.ceil(),
             height: r.height.ceil(),
         };
+        let made = self.sync_shadow(f.form == shape::Form::Pill);
         if r != self.window {
             self.window = r;
             unsafe {
@@ -540,6 +647,9 @@ impl Surface {
                     SWP_NOACTIVATE,
                 );
             }
+            self.put_shadow();
+        } else if made {
+            self.put_shadow();
         }
     }
 
@@ -550,18 +660,15 @@ impl Surface {
 
     /// From window px to the open layout's DIPs: it is centered in the
     /// body; y from the island's top.
-    fn to_open(&self, placement: Placement, x: f32, y: f32) -> (f32, f32) {
+    fn to_open(&self, f: shape::Frame, x: f32, y: f32) -> (f32, f32) {
         let s = self.scale;
-        let body = shape::body_rect(
-            placement,
+        let body = f.body(
             self.window.width,
             self.width.value * s,
             self.height.value * s,
-            EAR * s,
             self.width.is_settled(),
         );
-        let lx = (x - body.x - shape::ear_room(placement, EAR * s)) / s
-            - (self.width.value - self.open_size().0) / 2.0;
+        let lx = (x - body.x - f.ear_room()) / s - (self.width.value - self.open_size().0) / 2.0;
         (lx, (y - body.y) / s)
     }
 }
@@ -990,12 +1097,12 @@ impl App {
             }
         }
         for i in 0..self.surfaces.len() {
-            let (placement, setting, k) = (
-                self.placement,
+            let (f, setting, k) = (
+                self.frame_at(i),
                 self.open_width_setting,
                 self.settings.island_scale,
             );
-            self.surfaces[i].place(placement, setting, k, self.sizes);
+            self.surfaces[i].place(f, setting, k, self.sizes);
         }
         self.fit_text();
         self.retarget_all();
@@ -1006,10 +1113,21 @@ impl App {
         }
     }
 
+    /// Where island `i` sits, at its screen's scale.
+    fn frame_at(&self, i: usize) -> shape::Frame {
+        frame_for(
+            self.placement,
+            self.settings.island_style,
+            self.surfaces[i].scale,
+        )
+    }
+
     /// Draws one island's window from the shared state and its own.
     fn draw_surface(&mut self, i: usize) {
         let k = self.settings.island_scale;
         let placement = self.placement;
+        let form = self.settings.island_style;
+        let f = self.frame_at(i);
         let shape_style = self.settings.shape;
         let now = self.now_ms();
         let peek_u = self.peek_unscaled_at(i);
@@ -1032,8 +1150,8 @@ impl App {
         let s = sf.scale;
         let (w, h) = (sf.width.value.max(0.0) * s, sf.height.value.max(0.0) * s);
         let (ear, radius) = (EAR * s, RADIUS * s);
-        let body = shape::body_rect(placement, sf.window.width, w, h, ear, sf.width.is_settled());
-        let outline = shape::outline(shape_style, placement.hangs(), w, h, radius, ear, s);
+        let body = f.body(sf.window.width, w, h, sf.width.is_settled());
+        let outline = shape::outline(form, shape_style, f.hangs(), w, h, radius, ear, s);
         // The pointer only reaches the island inside its body, ears left
         // out; everywhere else, clicks go to what is below. The region takes
         // the bigger of the size now and the target, so it changes only when
@@ -1042,13 +1160,20 @@ impl App {
             sf.width.value.max(sf.width.target) * s,
             sf.height.value.max(sf.height.target) * s,
         );
-        let inset = shape::ear_room(placement, ear);
-        let rb = shape::body_rect(placement, sf.window.width, rw, rh, ear, true);
+        let inset = f.ear_room();
+        let rb = f.body(sf.window.width, rw, rh, true);
+        // A pill at the top owns the gap above it; a pill elsewhere starts
+        // at its body, so the shadow's room around it is click-through.
+        let top = if form == shape::Form::Pill && placement != Placement::Top {
+            rb.y.floor() as i32
+        } else {
+            0
+        };
         let region = [
             (rb.x + inset).floor() as i32,
-            0,
+            top,
             (rb.x + rb.width - inset).ceil() as i32,
-            rh.ceil() as i32,
+            (rb.y + rh).ceil() as i32,
         ];
         if region != sf.region {
             sf.region = region;
@@ -1151,7 +1276,13 @@ impl App {
             body,
             outline: &outline,
             scale: s,
-            inset: shape::ear_room(placement, ear),
+            inset,
+            shadow: (form == shape::Form::Pill).then(|| render::Shadow {
+                extent: shape::SHADOW_EXTENT * s,
+                drop: shape::SHADOW_DROP * s,
+                radius: shape::pill_radius(h, s).min(w / 2.0),
+                alpha: shape::SHADOW_ALPHA,
+            }),
             size: (sf.width.value.max(0.0), sf.height.value.max(0.0)),
             alpha,
             track: self.track.as_ref(),
@@ -1177,6 +1308,7 @@ impl App {
             render::forget_device(sf.renderer.take().as_ref());
             sf.renderer = render::Renderer::new(sf.hwnd).ok();
             if let Some(r) = &mut sf.renderer {
+                let _ = r.set_shadow_window(sf.shadow_hwnd);
                 let _ = r.draw(&scene);
             }
         }
@@ -1549,7 +1681,11 @@ impl App {
             let hide = self.settings.hide_in_full_screen && sf.full && !glance;
             unsafe {
                 if IsWindowVisible(sf.hwnd).as_bool() == hide {
-                    let _ = ShowWindow(sf.hwnd, if hide { SW_HIDE } else { SW_SHOWNA });
+                    let how = if hide { SW_HIDE } else { SW_SHOWNA };
+                    let _ = ShowWindow(sf.hwnd, how);
+                    if let Some(h) = sf.shadow_hwnd {
+                        let _ = ShowWindow(h, how);
+                    }
                 }
             }
         }
@@ -1619,16 +1755,16 @@ impl App {
     /// full-screen window may have gone over it), without taking the
     /// focus. Only where it shows.
     fn over_full_screen(&mut self) {
-        let over: Vec<HWND> = self
+        let over: Vec<(HWND, Option<HWND>)> = self
             .surfaces
             .iter()
             .filter(|s| s.full && !s.muted)
-            .map(|s| s.hwnd)
+            .map(|s| (s.hwnd, s.shadow_hwnd))
             .collect();
         if !over.is_empty() {
             self.full_glance = true;
             self.show_surfaces();
-            for hwnd in over {
+            for (hwnd, shadow) in over {
                 unsafe {
                     let _ = SetWindowPos(
                         hwnd,
@@ -1639,6 +1775,18 @@ impl App {
                         0,
                         SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
                     );
+                    // The shadow goes back just below it.
+                    if let Some(h) = shadow {
+                        let _ = SetWindowPos(
+                            h,
+                            Some(hwnd),
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+                        );
+                    }
                 }
             }
         }
@@ -1732,7 +1880,7 @@ impl App {
         if !self.surfaces[i].open {
             return;
         }
-        let (lx, ly) = self.surfaces[i].to_open(self.placement, x, y);
+        let (lx, ly) = self.surfaces[i].to_open(self.frame_at(i), x, y);
         if let Some(page) = pages::hit_tab(lx, ly) {
             self.show_page(page);
             return;
@@ -1795,7 +1943,7 @@ impl App {
         if !sf.open || !sf.height.is_settled() {
             return None;
         }
-        let (lx, ly) = sf.to_open(self.placement, x, y);
+        let (lx, ly) = sf.to_open(self.frame_at(i), x, y);
         if let Some(page) = pages::hit_tab(lx, ly) {
             return (page != self.page).then_some(render::Hot::Tab(page));
         }
@@ -1843,7 +1991,7 @@ impl App {
         unsafe {
             let _ = ScreenToClient(self.surfaces[i].hwnd, &mut p);
         }
-        let (lx, ly) = self.surfaces[i].to_open(self.placement, p.x as f32, p.y as f32);
+        let (lx, ly) = self.surfaces[i].to_open(self.frame_at(i), p.x as f32, p.y as f32);
         if !pages::over_time(lx, ly - pages::PAGE_Y, self.surfaces[i].open_width) {
             return;
         }
@@ -2876,7 +3024,8 @@ impl App {
                     toggle,
                     t.smooth_shape,
                     self.settings.shape == shape::Style::Smooth,
-                    true,
+                    // A pill's corners are its own.
+                    self.settings.island_style == shape::Form::Notch,
                 ),
             ),
             (0, row(line, "", false, false)),
@@ -3544,6 +3693,7 @@ fn arg(name: &str) -> Option<String> {
 #[derive(Default)]
 struct Overrides {
     placement: Option<Placement>,
+    island_style: Option<shape::Form>,
     monitor: Option<MonitorChoice>,
     text_align: Option<layout::TextAlign>,
     song_text: Option<layout::SongText>,
@@ -3557,6 +3707,7 @@ impl Overrides {
     fn from_args() -> Self {
         Self {
             placement: arg("--placement").and_then(|s| Placement::parse(&s)),
+            island_style: arg("--island-style").and_then(|s| shape::Form::parse(&s)),
             monitor: arg("--monitor").and_then(|s| MonitorChoice::parse(&s)),
             text_align: arg("--text-align").and_then(|s| layout::TextAlign::parse(&s)),
             song_text: arg("--song-text").and_then(|s| layout::SongText::parse(&s)),
@@ -3569,6 +3720,7 @@ impl Overrides {
 
     fn over(&self, mut s: Settings) -> Settings {
         s.placement = self.placement.unwrap_or(s.placement);
+        s.island_style = self.island_style.unwrap_or(s.island_style);
         if let Some(m) = &self.monitor {
             s.monitor = m.clone();
         }

@@ -1,0 +1,322 @@
+# QA del estilo de isla: island.exe --qa qa/estilos.txt --qa-out <carpeta>
+# La píldora (islandStyle) en cada posición y a varias escalas, con capturas
+# y comprobaciones; termina con la muesca, que no debe haber cambiado.
+slow 3
+set islandStyle "pill"
+wait-rest
+
+# top.
+set placement "top"
+wait-rest
+background
+grab pildora-top-cerrada
+film pildora-top-abrir 80
+open
+wait-rest
+grab pildora-top-abierta
+film pildora-top-cerrar 80
+close
+wait-rest
+grab pildora-top-cerrada2
+notice "Micrófono apagado" "Zoom"
+wait-rest
+grab pildora-top-aviso
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+grab pildora-top-toast
+wait 6000
+wait-rest
+idle 1000
+
+# floating.
+set placement "floating"
+wait-rest
+background
+grab pildora-floating-cerrada
+film pildora-floating-abrir 80
+open
+wait-rest
+grab pildora-floating-abierta
+film pildora-floating-cerrar 80
+close
+wait-rest
+grab pildora-floating-cerrada2
+notice "Micrófono apagado" "Zoom"
+wait-rest
+grab pildora-floating-aviso
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+grab pildora-floating-toast
+wait 6000
+wait-rest
+idle 1000
+
+# top-left.
+set placement "top-left"
+wait-rest
+background
+grab pildora-top-left-cerrada
+film pildora-top-left-abrir 80
+open
+wait-rest
+grab pildora-top-left-abierta
+film pildora-top-left-cerrar 80
+close
+wait-rest
+grab pildora-top-left-cerrada2
+notice "Micrófono apagado" "Zoom"
+wait-rest
+grab pildora-top-left-aviso
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+grab pildora-top-left-toast
+wait 6000
+wait-rest
+idle 1000
+
+# top-right.
+set placement "top-right"
+wait-rest
+background
+grab pildora-top-right-cerrada
+film pildora-top-right-abrir 80
+open
+wait-rest
+grab pildora-top-right-abierta
+film pildora-top-right-cerrar 80
+close
+wait-rest
+grab pildora-top-right-cerrada2
+notice "Micrófono apagado" "Zoom"
+wait-rest
+grab pildora-top-right-aviso
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+grab pildora-top-right-toast
+wait 6000
+wait-rest
+idle 1000
+
+# A escala 1.25.
+scale 1.25
+wait-rest
+# top.
+set placement "top"
+wait-rest
+background
+grab pildora-top-x1.25-cerrada
+film pildora-top-x1.25-abrir 80
+open
+wait-rest
+grab pildora-top-x1.25-abierta
+film pildora-top-x1.25-cerrar 80
+close
+wait-rest
+grab pildora-top-x1.25-cerrada2
+notice "Micrófono apagado" "Zoom"
+wait-rest
+grab pildora-top-x1.25-aviso
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+grab pildora-top-x1.25-toast
+wait 6000
+wait-rest
+idle 1000
+
+# floating.
+set placement "floating"
+wait-rest
+background
+grab pildora-floating-x1.25-cerrada
+film pildora-floating-x1.25-abrir 80
+open
+wait-rest
+grab pildora-floating-x1.25-abierta
+film pildora-floating-x1.25-cerrar 80
+close
+wait-rest
+grab pildora-floating-x1.25-cerrada2
+notice "Micrófono apagado" "Zoom"
+wait-rest
+grab pildora-floating-x1.25-aviso
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+grab pildora-floating-x1.25-toast
+wait 6000
+wait-rest
+idle 1000
+
+# top-left.
+set placement "top-left"
+wait-rest
+background
+grab pildora-top-left-x1.25-cerrada
+film pildora-top-left-x1.25-abrir 80
+open
+wait-rest
+grab pildora-top-left-x1.25-abierta
+film pildora-top-left-x1.25-cerrar 80
+close
+wait-rest
+grab pildora-top-left-x1.25-cerrada2
+notice "Micrófono apagado" "Zoom"
+wait-rest
+grab pildora-top-left-x1.25-aviso
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+grab pildora-top-left-x1.25-toast
+wait 6000
+wait-rest
+idle 1000
+
+# top-right.
+set placement "top-right"
+wait-rest
+background
+grab pildora-top-right-x1.25-cerrada
+film pildora-top-right-x1.25-abrir 80
+open
+wait-rest
+grab pildora-top-right-x1.25-abierta
+film pildora-top-right-x1.25-cerrar 80
+close
+wait-rest
+grab pildora-top-right-x1.25-cerrada2
+notice "Micrófono apagado" "Zoom"
+wait-rest
+grab pildora-top-right-x1.25-aviso
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+grab pildora-top-right-x1.25-toast
+wait 6000
+wait-rest
+idle 1000
+
+# A escala 2.
+scale 2
+wait-rest
+# top.
+set placement "top"
+wait-rest
+background
+grab pildora-top-x2-cerrada
+film pildora-top-x2-abrir 80
+open
+wait-rest
+grab pildora-top-x2-abierta
+film pildora-top-x2-cerrar 80
+close
+wait-rest
+grab pildora-top-x2-cerrada2
+notice "Micrófono apagado" "Zoom"
+wait-rest
+grab pildora-top-x2-aviso
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+grab pildora-top-x2-toast
+wait 6000
+wait-rest
+idle 1000
+
+# floating.
+set placement "floating"
+wait-rest
+background
+grab pildora-floating-x2-cerrada
+film pildora-floating-x2-abrir 80
+open
+wait-rest
+grab pildora-floating-x2-abierta
+film pildora-floating-x2-cerrar 80
+close
+wait-rest
+grab pildora-floating-x2-cerrada2
+notice "Micrófono apagado" "Zoom"
+wait-rest
+grab pildora-floating-x2-aviso
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+grab pildora-floating-x2-toast
+wait 6000
+wait-rest
+idle 1000
+
+# top-left.
+set placement "top-left"
+wait-rest
+background
+grab pildora-top-left-x2-cerrada
+film pildora-top-left-x2-abrir 80
+open
+wait-rest
+grab pildora-top-left-x2-abierta
+film pildora-top-left-x2-cerrar 80
+close
+wait-rest
+grab pildora-top-left-x2-cerrada2
+notice "Micrófono apagado" "Zoom"
+wait-rest
+grab pildora-top-left-x2-aviso
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+grab pildora-top-left-x2-toast
+wait 6000
+wait-rest
+idle 1000
+
+# top-right.
+set placement "top-right"
+wait-rest
+background
+grab pildora-top-right-x2-cerrada
+film pildora-top-right-x2-abrir 80
+open
+wait-rest
+grab pildora-top-right-x2-abierta
+film pildora-top-right-x2-cerrar 80
+close
+wait-rest
+grab pildora-top-right-x2-cerrada2
+notice "Micrófono apagado" "Zoom"
+wait-rest
+grab pildora-top-right-x2-aviso
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+grab pildora-top-right-x2-toast
+wait 6000
+wait-rest
+idle 1000
+
+# Vuelta a la muesca.
+scale 1
+set islandStyle "notch"
+set placement "floating"
+wait-rest
+background
+grab muesca-flotante
+idle 1000
+quit

@@ -12,7 +12,7 @@ use island_core::lyrics::Line;
 use island_core::media::{self as layout, Button, SongText, TextAlign, fmt_time};
 use island_core::menu;
 use island_core::pages::{self, FocusButton, Page};
-use island_core::shape::{Outline, Point, Rect, Segment};
+use island_core::shape::{self, Outline, Point, Rect, Segment};
 use island_core::svg;
 use windows::Win32::Foundation::{E_FAIL, HMODULE, HWND, POINT, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
@@ -71,6 +71,19 @@ use windows_numerics::{Matrix3x2, Vector2};
 use crate::bars::Bars;
 use crate::media::Track;
 
+/// A soft shadow under a pill, all in px.
+#[derive(Clone, Copy)]
+pub struct Shadow {
+    /// How far it reaches past the body.
+    pub extent: f32,
+    /// How far it falls below the body.
+    pub drop: f32,
+    /// The body's corner radius.
+    pub radius: f32,
+    /// How dark it is at the body's edge (0 to 1).
+    pub alpha: f32,
+}
+
 /// What to draw in a frame.
 pub struct Scene<'a> {
     /// The window, in px.
@@ -87,6 +100,8 @@ pub struct Scene<'a> {
     pub island_scale: f32,
     /// From the body's left edge to its content (the ear), in px.
     pub inset: f32,
+    /// A pill's shadow, drawn under the body.
+    pub shadow: Option<Shadow>,
     /// The body without ears, in DIPs.
     pub size: (f32, f32),
     /// How visible the closed, glance and open contents are (0 to 1).
@@ -433,8 +448,8 @@ pub struct MenuView<'a> {
     pub knob: Option<(usize, f32)>,
 }
 
-/// The menu window's own composition target; drawn with the island's
-/// device, so the menu costs no second one.
+/// A window's own composition target (the menu's, a pill's shadow's); drawn
+/// with the island's device, so it costs no second one.
 pub struct MenuTarget {
     _target: IDCompositionTarget,
     visual: IDCompositionVisual,
@@ -451,6 +466,8 @@ pub struct Renderer {
     /// While the cover travels between views, they leave it out.
     morphing: bool,
     surface: Option<(IDCompositionSurface, u32, u32)>,
+    /// A pill's shadow window, drawn along with the island.
+    shadow: Option<MenuTarget>,
     fill: ID2D1SolidColorBrush,
     ink: ID2D1SolidColorBrush,
     /// The artist next to the title.
@@ -780,6 +797,7 @@ impl Renderer {
                 _target: target,
                 visual,
                 surface: None,
+                shadow: None,
                 fill,
                 ink,
                 dim,
@@ -2350,7 +2368,105 @@ impl Renderer {
                 }
                 None => self.bars.hide()?,
             }
+            // The shadow is its own window's: drawn here so that the same
+            // commit shows both and it never lags the body.
+            if let Some(sh) = s.shadow {
+                self.draw_shadow(s, sh)?;
+            }
             self.dcomp.Commit()
+        }
+    }
+
+    /// Puts a pill's shadow on `hwnd` (a click-through window of the
+    /// island's size, just below it), or takes it off (`None`).
+    pub fn set_shadow_window(&mut self, hwnd: Option<HWND>) -> Result<()> {
+        self.shadow = match hwnd {
+            Some(h) => Some(self.menu_target(h)?),
+            None => None,
+        };
+        Ok(())
+    }
+
+    /// The shadow window, all of it: layers of black, each smaller and a
+    /// little more opaque, add up to a soft fall-off. Not committed.
+    fn draw_shadow(&mut self, s: &Scene, sh: Shadow) -> Result<()> {
+        let Some(mut t) = self.shadow.take() else {
+            return Ok(());
+        };
+        let drawn = self.draw_shadow_on(&mut t, s, sh);
+        self.shadow = Some(t);
+        drawn
+    }
+
+    fn draw_shadow_on(&mut self, t: &mut MenuTarget, s: &Scene, sh: Shadow) -> Result<()> {
+        let (w, h) = (s.width.max(1), s.height.max(1));
+        let surface = match &t.surface {
+            Some((x, sw, sh)) if (*sw, *sh) == (w, h) => x.clone(),
+            _ => unsafe {
+                let x = self.dcomp.CreateSurface(
+                    w,
+                    h,
+                    DXGI_FORMAT_B8G8R8A8_UNORM,
+                    DXGI_ALPHA_MODE_PREMULTIPLIED,
+                )?;
+                t.visual.SetContent(&x)?;
+                t.surface = Some((x.clone(), w, h));
+                x
+            },
+        };
+        unsafe {
+            let mut offset = POINT::default();
+            let dxgi: IDXGISurface = surface.BeginDraw(None, &mut offset)?;
+            let drawn = (|| {
+                let props = D2D1_BITMAP_PROPERTIES1 {
+                    pixelFormat: D2D1_PIXEL_FORMAT {
+                        format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                        alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                    },
+                    dpiX: 96.0,
+                    dpiY: 96.0,
+                    bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+                    ..Default::default()
+                };
+                let bitmap = self.dc.CreateBitmapFromDxgiSurface(&dxgi, Some(&props))?;
+                self.dc.SetTarget(&bitmap);
+                self.dc.BeginDraw();
+                let (ox, oy) = (offset.x as f32, offset.y as f32);
+                self.dc.SetTransform(&Matrix3x2::translation(ox, oy));
+                self.dc.PushAxisAlignedClip(
+                    &D2D_RECT_F {
+                        left: 0.0,
+                        top: 0.0,
+                        right: w as f32,
+                        bottom: h as f32,
+                    },
+                    D2D1_ANTIALIAS_MODE_ALIASED,
+                );
+                self.dc.Clear(Some(&D2D1_COLOR_F::default()));
+                if s.body.width >= 1.0 && s.body.height >= 1.0 {
+                    let n = (sh.extent / 1.5).ceil().clamp(8.0, 24.0) as u32;
+                    for i in 0..n {
+                        let (grow, a) = shape::shadow_layer(i, n, sh.extent, sh.alpha);
+                        self.tinted_rounded(
+                            Rect {
+                                x: ox + s.body.x - grow,
+                                y: oy + s.body.y + sh.drop - grow,
+                                width: s.body.width + 2.0 * grow,
+                                height: s.body.height + 2.0 * grow,
+                            },
+                            sh.radius + grow,
+                            [0.0; 3],
+                            a,
+                        );
+                    }
+                }
+                self.dc.PopAxisAlignedClip();
+                let ended = self.dc.EndDraw(None, None);
+                self.dc.SetTarget(None::<&ID2D1Image>);
+                ended
+            })();
+            surface.EndDraw()?;
+            drawn
         }
     }
 

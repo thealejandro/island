@@ -101,6 +101,7 @@ that isn't valid JSON is ignored until it is fixed.
 | `language` | `""` (the system's), `en`, `es` | `""` |
 | `placement` | `top`, `floating`, `top-left`, `top-right` | `top` |
 | `shape` | `smooth` (continuous corners, rounder when open), `classic` | `smooth` |
+| `islandStyle` | `notch` (hangs from the edge with ears at `top`; a rounded rectangle at the other placements, as before), `pill` (a capsule with a soft shadow, a small gap below the edge at `top`; `shape` doesn't apply) | `notch` |
 | `monitor` | `primary`, a screen's number counted left to right, `all`, or a list of screens like `[1, 3]` (`1,3` from `--monitor`) | `primary` |
 | `glanceScreen` | `all`, `active` (a notification's glance comes out only on the island of the screen being looked at, the one with the window in front; the song and lyrics stay on all) | `all` |
 | `textAlign` | `center`, `left` | `center` |
@@ -297,7 +298,7 @@ The icons are filled ones from Microsoft's
 so they look the same on Windows 10 and 11 and at any scale.
 
 For trying things out, the command line wins over the file:
-`--placement`, `--monitor`, `--text-align`, `--song-text`, `--lyrics`,
+`--placement`, `--island-style`, `--monitor`, `--text-align`, `--song-text`, `--lyrics`,
 `--open-lyrics on|off`, `--open-width` and `--page home|focus`.
 CI builds with the MSVC toolchain. Without the Visual Studio Build Tools,
 the `stable-x86_64-pc-windows-gnullvm` toolchain works too:
