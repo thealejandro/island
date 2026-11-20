@@ -207,6 +207,9 @@ pub struct Settings {
     pub animations: Animations,
     /// The island hides on a screen while an app is in full screen there.
     pub hide_in_full_screen: bool,
+    /// While a song is loaded and the focus timer is on, the closed island
+    /// shows the timer in a small bubble beside it.
+    pub dual_activity: bool,
 }
 
 /// `lyricsDelay`'s range, in ms.
@@ -258,6 +261,7 @@ impl Default for Settings {
             island_color: IslandColor::Black,
             animations: Animations::System,
             hide_in_full_screen: true,
+            dual_activity: true,
         }
     }
 }
@@ -286,6 +290,7 @@ pub const TEMPLATE: &str = r#"{
   "islandColor": "black",
   "animations": "system",
   "hideInFullScreen": true,
+  "dualActivity": true,
   "focusMinutes": 25,
   "breakMinutes": 5,
   "longBreakMinutes": 15,
@@ -452,6 +457,7 @@ impl Settings {
                 .and_then(Animations::parse)
                 .unwrap_or(d.animations),
             hide_in_full_screen: flag("hideInFullScreen", d.hide_in_full_screen),
+            dual_activity: flag("dualActivity", d.dual_activity),
         })
     }
 
@@ -881,6 +887,10 @@ mod tests {
         assert!(Animations::On.on(false) && !Animations::Off.on(true));
         assert!(parse(TEMPLATE).hide_in_full_screen);
         assert!(!parse(r#"{"hideInFullScreen": false}"#).hide_in_full_screen);
+        assert!(parse(TEMPLATE).dual_activity);
+        assert!(parse("{}").dual_activity);
+        assert!(!parse(r#"{"dualActivity": false}"#).dual_activity);
+        assert!(parse(r#"{"dualActivity": "no"}"#).dual_activity);
         assert_eq!(parse(TEMPLATE).glance_screen, GlanceScreen::All);
         let s = parse(r#"{"glanceScreen": "active"}"#);
         assert_eq!(s.glance_screen, GlanceScreen::Active);

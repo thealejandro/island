@@ -1,0 +1,136 @@
+# QA de la actividad doble: island.exe --qa qa/dual.txt --qa-out <carpeta>
+# La canción es lo principal y el temporizador de foco sale en una burbuja
+# al lado. Con capturas y comprobaciones; no hay que ejecutarlo a mano.
+slow 3
+set islandStyle "notch"
+set placement "top"
+wait-rest
+track "Canción" "Artista"
+focus start
+wait 1200
+focus pause
+wait-rest
+background
+grab dual-cerrada
+# Con el temporizador en pausa la burbuja está quieta: cero fotogramas.
+idle 1000
+film dual-abrir 80
+open
+wait-rest
+grab dual-abierta
+film dual-cerrar 80
+close
+wait-rest
+grab dual-cerrada2
+
+# Un aviso, un nivel y un toast tapan la burbuja.
+notice "Micrófono apagado" "Zoom"
+wait-rest
+grab dual-aviso
+wait 4000
+wait-rest
+level 0.6
+wait-rest
+grab dual-nivel
+wait 3000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+grab dual-toast
+wait 6000
+wait-rest
+background
+grab dual-tras-toast
+idle 1000
+
+# Sin canción el temporizador pasa a ser lo principal y la burbuja se va.
+notrack
+wait-rest
+background
+grab dual-sin-cancion
+track "Canción" "Artista"
+wait-rest
+
+# Con la opción apagada no hay burbuja.
+set dualActivity false
+wait-rest
+background
+grab dual-apagada
+set dualActivity true
+wait-rest
+
+# Píldora.
+set islandStyle "pill"
+wait-rest
+background
+grab dual-pildora-cerrada
+film dual-pildora-abrir 80
+open
+wait-rest
+close
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+grab dual-pildora-toast
+wait 6000
+wait-rest
+
+# Posiciones.
+set placement "floating"
+wait-rest
+background
+grab dual-pildora-floating
+set placement "top-left"
+wait-rest
+background
+grab dual-pildora-top-left
+set placement "top-right"
+wait-rest
+background
+grab dual-pildora-top-right
+
+# Escalas.
+scale 1.5
+wait-rest
+background
+grab dual-pildora-x1.5
+set islandScale 1.4
+wait-rest
+background
+grab dual-pildora-isla1.4
+focus start
+wait-rest
+film dual-isla1.4-abrir-burbuja 80
+bubble-open
+wait-rest
+grab dual-isla1.4-abierta-burbuja
+close
+wait-rest
+focus pause
+set islandScale 1
+scale 1
+
+# Título largo.
+track "Una canción con un título larguísimo que no cabe" "Un artista con un nombre también muy largo"
+wait-rest
+background
+grab dual-titulo-largo
+focus start
+wait-rest
+film dual-titulo-largo-abrir-burbuja 80
+bubble-open
+wait-rest
+grab dual-titulo-largo-abierta-burbuja
+close
+wait-rest
+focus pause
+wait-rest
+set islandStyle "notch"
+set placement "top"
+wait-rest
+background
+grab dual-titulo-largo-muesca
+focus reset
+wait-rest
+idle 1000
+quit

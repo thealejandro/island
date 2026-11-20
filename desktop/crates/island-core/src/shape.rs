@@ -464,6 +464,43 @@ impl Frame {
             height,
         }
     }
+
+    /// Which side of the island its bubble (the second activity) goes: the
+    /// right, or the left at the top right, where the right is the screen's
+    /// edge.
+    pub fn bubble_side(&self) -> Side {
+        match self.placement {
+            Placement::TopRight => Side::Left,
+            _ => Side::Right,
+        }
+    }
+
+    /// Where the bubble goes, from the island's `body` (as [`Frame::body`]
+    /// gives it, ears included). `width` x `height` is the bubble without
+    /// ears, in px; `gap` the space between it and the island where the
+    /// island doesn't hang (a hanging one's ears touch). `t` is 0 with the
+    /// bubble hidden behind the island's edge and 1 with it out.
+    pub fn bubble(&self, body: Rect, width: f32, height: f32, gap: f32, t: f32) -> Rect {
+        let full = width + 2.0 * self.ear_room();
+        let g = if self.hangs() { 0.0 } else { gap };
+        let (out, hid) = match self.bubble_side() {
+            Side::Right => (body.x + body.width + g, body.x + body.width - full),
+            Side::Left => (body.x - g - full, body.x),
+        };
+        Rect {
+            x: hid + (out - hid) * t,
+            y: body.y,
+            width: full,
+            height,
+        }
+    }
+}
+
+/// A side of the island.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
 }
 
 #[cfg(test)]
@@ -846,5 +883,117 @@ mod tests {
             assert!((shadow_layer(0, n, extent, peak).0 - extent).abs() < 1e-4);
             assert!((1.0 - seen - peak).abs() < 1e-4, "{n}: {}", 1.0 - seen);
         }
+    }
+
+    /// The bubble's biggest, in DIPs, as the app sizes the window for it.
+    const BUBBLE_MOST: f32 = 8.0 + 92.0 * 1.4 + 2.0 * 10.0;
+
+    #[test]
+    fn the_bubble_sits_beside_the_body() {
+        let mon = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        };
+        for scale in [1.0, 1.5, 2.0] {
+            for p in PLACEMENTS {
+                for form in [Form::Notch, Form::Pill] {
+                    let fr = Frame {
+                        placement: p,
+                        form,
+                        ear: 10.0 * scale,
+                        margin: 8.0 * scale,
+                        gap: 6.0 * scale,
+                        shadow: 20.0 * scale,
+                    };
+                    let room = BUBBLE_MOST * scale;
+                    let widest = 560.0 * scale + 2.0 * room;
+                    let win = fr.window(mon, widest, 180.0 * scale);
+                    let win = Rect {
+                        x: win.x.round(),
+                        y: win.y.round(),
+                        width: win.width.ceil(),
+                        height: win.height.ceil(),
+                    };
+                    let (bw, bh) = (92.0 * 1.4 * scale, 40.0 * scale);
+                    let gap = 8.0 * scale;
+                    for body_w in [180.0 * scale, 360.0 * scale, 560.0 * scale] {
+                        let body = fr.body(win.width, body_w, 44.0 * scale, true);
+                        let out = fr.bubble(body, bw, bh, gap, 1.0);
+                        let hid = fr.bubble(body, bw, bh, gap, 0.0);
+                        let ctx = format!("{p:?} {form:?} x{scale} body {body_w}");
+                        assert_eq!(out.y, body.y, "{ctx}");
+                        assert_eq!(out.width, bw + 2.0 * fr.ear_room(), "{ctx}");
+                        assert_eq!(out.height, bh, "{ctx}");
+                        // Out, it doesn't overlap the body: it touches it
+                        // when the island hangs, else the gap is between.
+                        let g = if fr.hangs() { 0.0 } else { gap };
+                        match fr.bubble_side() {
+                            Side::Right => {
+                                assert_eq!(out.x, body.x + body.width + g, "{ctx}");
+                            }
+                            Side::Left => {
+                                assert_eq!(out.x + out.width, body.x - g, "{ctx}");
+                            }
+                        }
+                        // Out, inside the window.
+                        assert!(out.x >= 0.0, "{ctx}: {out:?}");
+                        assert!(out.x + out.width <= win.width, "{ctx}: {out:?}");
+                        // Hidden, behind the body's edge.
+                        assert!(hid.x >= body.x - 1e-3, "{ctx}: {hid:?}");
+                        assert!(hid.x + hid.width <= body.x + body.width + 1e-3, "{ctx}");
+                        // Halfway is between.
+                        let mid = fr.bubble(body, bw, bh, gap, 0.5);
+                        assert!((mid.x - (hid.x + out.x) / 2.0).abs() < 1e-3, "{ctx}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_bubble_goes_left_only_at_the_top_right() {
+        for p in PLACEMENTS {
+            let want = if p == Placement::TopRight {
+                Side::Left
+            } else {
+                Side::Right
+            };
+            for form in [Form::Notch, Form::Pill] {
+                assert_eq!(frame(p, form).bubble_side(), want, "{p:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn room_for_the_bubble_keeps_the_body_centered() {
+        let mon = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        };
+        let room = BUBBLE_MOST;
+        for form in [Form::Notch, Form::Pill] {
+            for p in [Placement::Top, Placement::Floating] {
+                let fr = frame(p, form);
+                for r in [0.0, room] {
+                    let win = fr.window(mon, 560.0 + 2.0 * r, 180.0);
+                    let body = fr.body(win.width, 300.0, 40.0, true);
+                    let centre = win.x + body.x + body.width / 2.0;
+                    assert!((centre - 960.0).abs() <= 1.0, "{p:?} {form:?} room {r}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_hanging_bubble_joins_the_body_at_the_top() {
+        // Its ear starts where the body's ends: one edge along the top.
+        let fr = frame(Placement::Top, Form::Notch);
+        let body = fr.body(900.0, 300.0, 40.0, true);
+        let b = fr.bubble(body, 74.0, 40.0, 8.0, 1.0);
+        assert_eq!(b.x, body.x + body.width);
     }
 }
