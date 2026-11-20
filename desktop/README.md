@@ -118,6 +118,7 @@ that isn't valid JSON is ignored until it is fixed.
 | `islandColor` | `black` (like a notch), `theme`, or a color like `#1e2a3a` (one too light for the white text is darkened to a 4.5:1 contrast) | `black` |
 | `animations` | `system` (as Windows' "Animation effects"), `on`, `off` (no wobble, crossfades, ring or comet: the island goes straight to its size) | `system` |
 | `hideInFullScreen` | `true`, `false` (hides the island on a screen while an app is in full screen there; a notification's glance still comes out if `notificationsInFullScreen` allows it) | `true` |
+| `dualActivity` | `true`, `false` (while a song is loaded and the focus timer is on, the closed island shows the timer in a small bubble beside it; `false`: the song alone, as before) | `true` |
 | `defaultPage` | `home`, `focus` | `home` |
 | `focusMinutes` | 5 to 120 | `25` |
 | `breakMinutes` | 1 to 30 | `5` |

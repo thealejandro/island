@@ -33,6 +33,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicIsize};
 use std::time::Instant;
 
+use island_core::activity;
 use island_core::agenda as core_agenda;
 use island_core::battery::Note as BatteryNote;
 use island_core::bluetooth::Event as BtEvent;
@@ -54,9 +55,9 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Globalization::{GetTimeFormatEx, GetUserDefaultLocaleName, TIME_NOSECONDS};
 use windows::Win32::Graphics::Gdi::{
-    CreateRectRgn, DISPLAY_DEVICEW, EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, HDC,
-    HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MONITORINFOEXW, MonitorFromPoint,
-    ScreenToClient, SetWindowRgn,
+    CombineRgn, CreateRectRgn, DISPLAY_DEVICEW, DeleteObject, EnumDisplayDevicesW,
+    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO,
+    MONITORINFOEXW, MonitorFromPoint, RGN_OR, ScreenToClient, SetWindowRgn,
 };
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
@@ -432,8 +433,17 @@ struct Surface {
     peek_view: bool,
     /// The pointer is over this island (WM_MOUSELEAVE is armed).
     tracking: bool,
-    /// The window region last set, in px: left, top, right, bottom.
-    region: [i32; 4],
+    /// The window region last set, in px: the island's rect (left, top,
+    /// right, bottom), then its bubble's (all zeros: none).
+    region: [i32; 12],
+    /// The focus timer's bubble beside the closed island, in DIPs: how far
+    /// it is out (0 hidden behind the island, the gap plus its width out).
+    bubble: Spring,
+    /// The pointer is over the bubble (while the island is closed).
+    on_bubble: bool,
+    /// The bubble's rect in the region (px) while the island opens from it,
+    /// so the pointer stays inside the region until it leaves.
+    bubble_hold: Option<[i32; 4]>,
     /// While this island's springs move: the last frame. `None`: no frames
     /// asked for.
     last_frame: Option<Instant>,
@@ -499,7 +509,10 @@ impl Surface {
             open: false,
             peek_view: false,
             tracking: false,
-            region: [0; 4],
+            region: [0; 12],
+            bubble: Spring::at(0.0),
+            on_bubble: false,
+            bubble_hold: None,
             last_frame: None,
             pacer: pacer::Pacer::new(hwnd, WM_APP_FRAME),
             shrinking: false,
@@ -606,7 +619,14 @@ impl Surface {
     }
 
     /// Places the window on its screen at that screen's scale.
-    fn place(&mut self, f: shape::Frame, open_width_setting: f32, k: f32, sz: layout::Sizes) {
+    fn place(
+        &mut self,
+        f: shape::Frame,
+        open_width_setting: f32,
+        k: f32,
+        sz: layout::Sizes,
+        room: f32,
+    ) {
         // Small or scaled-up screens get a narrower open island.
         let screen = self.monitor.rect.width / self.scale;
         self.open_width = layout::fit_open_width(open_width_setting, screen);
@@ -624,7 +644,7 @@ impl Surface {
         };
         let r = f.window(
             area,
-            (self.widest(k) + 2.0 * spring::ROOM_WIDTH) * s,
+            (self.widest(k) + 2.0 * spring::ROOM_WIDTH + 2.0 * room) * s,
             (OPEN.1 + spring::ROOM_HEIGHT) * s,
         );
         let r = Rect {
@@ -1055,6 +1075,9 @@ impl App {
                     sf.mon = mon;
                     sf.monitor = m;
                     sf.scale = scale;
+                    if !self.settings.dual_activity {
+                        sf.bubble = Spring::at(0.0);
+                    }
                     Some(sf)
                 }
                 None => Surface::new(mon, id.clone(), m, scale),
@@ -1102,7 +1125,13 @@ impl App {
                 self.open_width_setting,
                 self.settings.island_scale,
             );
-            self.surfaces[i].place(f, setting, k, self.sizes);
+            // The room beside the island for the focus timer's bubble.
+            let room = if self.settings.dual_activity {
+                activity::bubble_room(k, EAR)
+            } else {
+                0.0
+            };
+            self.surfaces[i].place(f, setting, k, self.sizes, room);
         }
         self.fit_text();
         self.retarget_all();
@@ -1120,6 +1149,123 @@ impl App {
             self.settings.island_style,
             self.surfaces[i].scale,
         )
+    }
+
+    /// The focus timer goes in a bubble beside island `i` while the song
+    /// has the island: closed (or a glance), the timer on, and no
+    /// notification's glance on top.
+    fn bubble_on(&self, i: usize) -> bool {
+        let sf = &self.surfaces[i];
+        let hidden =
+            self.settings.hide_in_full_screen && sf.full && !(self.full_glance && !sf.muted);
+        self.settings.dual_activity
+            && !hidden
+            && self.track.is_some()
+            && self.timer.active(&self.settings.focus)
+            && !self.surfaces[i].open
+            && !self.toast_shown_at(i)
+    }
+
+    /// The bubble's size in DIPs at `islandScale`: wider with hours, chosen
+    /// by the phase's length so it never changes on a tick.
+    fn bubble_dips(&self) -> (f32, f32) {
+        let k = self.settings.island_scale;
+        let long = self.settings.focus.minutes(self.timer.phase) >= 60;
+        (activity::bubble_width(long) * k, self.sizes.closed.1 * k)
+    }
+
+    /// Where island `i`'s bubble rests when it is out, in px (ears
+    /// included), beside the body at the bigger of its size now and its
+    /// target (as the region takes it).
+    fn bubble_rest(&self, i: usize) -> Rect {
+        let sf = &self.surfaces[i];
+        let s = sf.scale;
+        let (bw, bh) = self.bubble_dips();
+        let (rw, rh) = (
+            sf.width.value.max(sf.width.target) * s,
+            sf.height.value.max(sf.height.target) * s,
+        );
+        let f = self.frame_at(i);
+        let rb = f.body(sf.window.width, rw, rh, true);
+        f.bubble(rb, bw * s, bh * s, activity::BUBBLE_GAP * s, 1.0)
+    }
+
+    /// The bubble's part of the window region when it is out (ears left
+    /// out, as for the body): left, top, right, bottom in px.
+    fn bubble_region(&self, i: usize) -> [i32; 4] {
+        let r = self.bubble_rest(i);
+        let f = self.frame_at(i);
+        let inset = f.ear_room();
+        // From the body's edge, so the gap between them is inside too: the
+        // bubble slides through it and the pointer crosses it.
+        let sf = &self.surfaces[i];
+        let (rw, rh) = (
+            sf.width.value.max(sf.width.target) * sf.scale,
+            sf.height.value.max(sf.height.target) * sf.scale,
+        );
+        let rb = f.body(sf.window.width, rw, rh, true);
+        let (body_l, body_r) = (rb.x + inset, rb.x + rb.width - inset);
+        let (left, right) = if r.x + r.width / 2.0 < rb.x + rb.width / 2.0 {
+            (r.x + inset, body_l)
+        } else {
+            (body_r, r.x + r.width - inset)
+        };
+        let top = if self.settings.island_style == shape::Form::Pill
+            && self.placement != Placement::Top
+        {
+            r.y.floor() as i32
+        } else {
+            0
+        };
+        [
+            left.floor() as i32,
+            top,
+            right.ceil() as i32,
+            (r.y + r.height).ceil() as i32,
+        ]
+    }
+
+    /// The pointer at (x, y) in island `i`'s window is over its bubble.
+    fn over_bubble(&self, i: usize, x: f32, y: f32) -> bool {
+        if self.surfaces[i].bubble.target <= 0.0 {
+            return false;
+        }
+        let r = self.bubble_region(i);
+        x >= r[0] as f32 && x < r[2] as f32 && y >= r[1] as f32 && y < r[3] as f32
+    }
+
+    /// Opens island `i` from its bubble, on the focus page: its rect stays
+    /// in the region until the pointer leaves it, so opening doesn't make
+    /// the pointer fall outside and close it again.
+    fn open_from_bubble(&mut self, i: usize) {
+        let hold = self.bubble_region(i);
+        let sf = &mut self.surfaces[i];
+        sf.bubble_hold = Some(hold);
+        sf.on_bubble = false;
+        if self.surfaces.iter().any(|s| s.open) {
+            self.show_page(Page::Focus);
+        } else {
+            // Nothing is on screen to cross from: just there.
+            self.page = Page::Focus;
+            self.page_from = None;
+        }
+        self.set_open(i, true);
+    }
+
+    /// A press on the focus page's buttons (also the QA's way to drive the
+    /// timer): the timer, its alarm, and the bubble that follows it.
+    fn focus_press(&mut self, b: FocusButton) {
+        let (now, l) = (self.now_ms(), self.settings.focus);
+        match b {
+            FocusButton::PlayPause => self.timer.toggle(now),
+            FocusButton::Reset => self.timer.reset(&l),
+            FocusButton::Skip => {
+                self.timer.skip(now, &l);
+            }
+        }
+        self.arm_focus();
+        self.retarget_all();
+        self.redraw_all();
     }
 
     /// Draws one island's window from the shared state and its own.
@@ -1145,6 +1291,10 @@ impl App {
             .and_then(|t| island_core::notifications::orbit(t.elapsed().as_secs_f32() * 1000.0));
         let when = self.texts.now;
         let lyrics_filled = !self.lines.is_empty();
+        // The focus timer's bubble: where it rests and how big (before the
+        // island's borrow below).
+        let bubble_rest = self.bubble_region(i);
+        let (bubble_w, bubble_h) = self.bubble_dips();
 
         let sf = &mut self.surfaces[i];
         let s = sf.scale;
@@ -1169,19 +1319,58 @@ impl App {
         } else {
             0
         };
+        // The bubble is clickable while it is out (or on its way), and
+        // while the island opens from it, where the pointer still is.
+        let bubble_out = sf.bubble.target > 0.0 || sf.bubble.value > 0.5;
+        // While held, the hold stays whatever the bubble does.
+        let extras = [bubble_out.then_some(bubble_rest), sf.bubble_hold];
+        let [e0, e1] = extras.map(|e| e.unwrap_or([0; 4]));
         let region = [
             (rb.x + inset).floor() as i32,
             top,
             (rb.x + rb.width - inset).ceil() as i32,
             (rb.y + rh).ceil() as i32,
+            e0[0],
+            e0[1],
+            e0[2],
+            e0[3],
+            e1[0],
+            e1[1],
+            e1[2],
+            e1[3],
         ];
         if region != sf.region {
             sf.region = region;
             unsafe {
                 let rgn = CreateRectRgn(region[0], region[1], region[2], region[3]);
+                for e in extras.into_iter().flatten() {
+                    let extra = CreateRectRgn(e[0], e[1], e[2], e[3]);
+                    let _ = CombineRgn(Some(rgn), Some(rgn), Some(extra), RGN_OR);
+                    let _ = DeleteObject(extra.into());
+                }
                 SetWindowRgn(sf.hwnd, Some(rgn), false);
             }
         }
+        // How far out the bubble is, 0 to 1, and where it is now.
+        let bubble_t = (sf.bubble.value / (activity::BUBBLE_GAP + bubble_w)).clamp(0.0, 1.0);
+        let bubble_px = (bubble_w * s, bubble_h * s);
+        let bubble_rect = f.bubble(
+            body,
+            bubble_px.0,
+            bubble_px.1,
+            activity::BUBBLE_GAP * s,
+            bubble_t,
+        );
+        let bubble_outline = shape::outline(
+            form,
+            shape_style,
+            f.hangs(),
+            bubble_px.0,
+            bubble_px.1,
+            radius,
+            ear,
+            s,
+        );
         let lyrics = lyrics_filled.then_some(render::LyricsView {
             lines: &self.lines,
             index: self.lyric_index,
@@ -1228,6 +1417,7 @@ impl App {
             running: tm.running(),
             resting: tm.phase != Phase::Focus,
         };
+        let bubble_tint = focus_view.tint();
         fn shown<'a>(
             n: &'a Notice,
             when: &'a str,
@@ -1257,7 +1447,24 @@ impl App {
             tabs_timer: tm.running(),
             focus: focus_view,
             notice: self.notice.as_ref().filter(|_| !sf.muted).map(view),
-            closed_timer: (active && self.track.is_none()).then_some(left.as_str()),
+            closed_timer: (activity::closed(
+                self.track.is_some(),
+                active,
+                self.settings.dual_activity,
+            )
+            .0 == Some(activity::Activity::Timer))
+            .then_some(left.as_str()),
+            bubble: (bubble_t > 0.0).then(|| render::Bubble {
+                rect: bubble_rect,
+                outline: &bubble_outline,
+                inset,
+                // Before `islandScale`, which render's transform applies.
+                size: (bubble_w / k, bubble_h / k),
+                time: &left,
+                tint: bubble_tint,
+                running: tm.running(),
+                alpha: bubble_t,
+            }),
             swap: sf.swap.as_ref().map(|(b, at)| render::Swap {
                 before: match b {
                     Before::Notice(n) => render::Before::Notice(view(n)),
@@ -1332,7 +1539,7 @@ impl App {
         {
             sooner(1000 - (t.position_now() % 1000) as u32 + 15);
         }
-        let shown = self.surfaces[i].open || self.track.is_none();
+        let shown = self.surfaces[i].open || self.track.is_none() || self.bubble_on(i);
         if self.timer.running() && shown {
             // It shows the second rounded up: it changes on a whole one.
             let left = self.timer.left_ms(self.now_ms());
@@ -1389,6 +1596,8 @@ impl App {
             );
         }
         self.arm_focus();
+        // The bubble goes with the timer.
+        self.retarget_all();
         self.redraw_all();
     }
 
@@ -1877,6 +2086,14 @@ impl App {
             self.set_peek(false);
             return;
         }
+        // On the focus timer's bubble: the island opens at once, on its page.
+        if !self.surfaces[i].open && self.over_bubble(i, x, y) {
+            unsafe {
+                let _ = KillTimer(Some(self.surfaces[i].hwnd), HOVER_TIMER);
+            }
+            self.open_from_bubble(i);
+            return;
+        }
         if !self.surfaces[i].open {
             return;
         }
@@ -1905,17 +2122,9 @@ impl App {
                 self.media.send(cmd);
             }
             Page::Focus => {
-                let (now, l) = (self.now_ms(), self.settings.focus);
-                match pages::hit_focus(lx, py, self.surfaces[i].open_width) {
-                    Some(FocusButton::PlayPause) => self.timer.toggle(now),
-                    Some(FocusButton::Reset) => self.timer.reset(&l),
-                    Some(FocusButton::Skip) => {
-                        self.timer.skip(now, &l);
-                    }
-                    None => return,
+                if let Some(b) = pages::hit_focus(lx, py, self.surfaces[i].open_width) {
+                    self.focus_press(b);
                 }
-                self.arm_focus();
-                self.redraw_all();
             }
         }
     }
@@ -2202,6 +2411,9 @@ impl App {
         // The glance stays the view being left while the island opens (it
         // is dropped once open), so the song's line never flashes between.
         self.surfaces[i].open = open;
+        if !open {
+            self.surfaces[i].bubble_hold = None;
+        }
         self.retarget_surface(i);
         self.follow_lyrics();
     }
@@ -2236,6 +2448,11 @@ impl App {
         let k = self.settings.island_scale;
         let peeking = self.peeking(i);
         let track_some = self.track.is_some();
+        let bubble_to = if self.bubble_on(i) {
+            activity::BUBBLE_GAP + self.bubble_dips().0
+        } else {
+            0.0
+        };
         let peek_size = {
             let (w, h) = self.peek_unscaled_at(i);
             (w * k, h * k)
@@ -2259,6 +2476,11 @@ impl App {
         }
         sf.width.target = w;
         sf.height.target = h;
+        sf.bubble.target = bubble_to;
+        if !self.settings.dual_activity {
+            // The window has no room for a bubble: none on its way back.
+            sf.bubble = Spring::at(0.0);
+        }
         if sf.last_frame.is_none() {
             sf.last_frame = Some(Instant::now());
             sf.pacer.start();
@@ -2301,7 +2523,14 @@ impl App {
                 (_, false, true) => spring::OPEN_WIDTH,
                 (_, false, false) => spring::GLANCE,
             };
+            // The bubble slides out firm, in DIPs like the rest.
+            let pb = if motion() {
+                spring::GLANCE
+            } else {
+                spring::STILL
+            };
             moving = sf.width.advance(&pw, ms) | sf.height.advance(&ph, ms);
+            moving |= sf.bubble.advance(&pb, ms);
             if let Some((_, at)) = &sf.swap {
                 if at.elapsed().as_secs_f32() * 1000.0 < SWAP_MS {
                     moving = true;
@@ -2843,6 +3072,19 @@ impl App {
                     }
                 }
                 let (x, y) = (lp.0 as i16 as f32, (lp.0 >> 16) as i16 as f32);
+                // Over the focus timer's bubble: it opens on its page.
+                self.surfaces[i].on_bubble = !self.surfaces[i].open && self.over_bubble(i, x, y);
+                // Opened from the bubble and moved off it: its rect no
+                // longer needs to stay in the region.
+                if let Some(h) = self.surfaces[i].bubble_hold
+                    && self.surfaces[i].open
+                    && !(x >= h[0] as f32 && x < h[2] as f32 && y >= h[1] as f32 && y < h[3] as f32)
+                {
+                    self.surfaces[i].bubble_hold = None;
+                    if self.surfaces[i].last_frame.is_none() {
+                        self.draw_surface(i);
+                    }
+                }
                 let hot = self.hot_at(i, x, y);
                 // Held down and moved off: no longer pressed.
                 let pressed = self.pressed && hot == self.hot;
@@ -2851,6 +3093,8 @@ impl App {
             WM_MOUSELEAVE => {
                 self.set_hot(i, None, false);
                 self.surfaces[i].tracking = false;
+                self.surfaces[i].on_bubble = false;
+                self.surfaces[i].bubble_hold = None;
                 unsafe {
                     let _ = KillTimer(Some(hwnd), HOVER_TIMER);
                     // Off a notification: it goes a moment later.
@@ -2868,7 +3112,20 @@ impl App {
                 // player waits until it is gone (it opens then, see
                 // PEEK_TIMER), with no timer running meanwhile.
                 if self.surfaces[i].tracking && !self.toast_shown_at(i) {
-                    self.set_open(i, true);
+                    // The bubble may be gone or the pointer off it by now.
+                    let mut p = POINT::default();
+                    unsafe {
+                        let _ = GetCursorPos(&mut p);
+                        let _ = ScreenToClient(hwnd, &mut p);
+                    }
+                    if self.surfaces[i].on_bubble
+                        && self.bubble_on(i)
+                        && self.over_bubble(i, p.x as f32, p.y as f32)
+                    {
+                        self.open_from_bubble(i);
+                    } else {
+                        self.set_open(i, true);
+                    }
                 }
             }
             WM_APP_FRAME => {

@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
+use island_core::activity;
 use island_core::color;
 use island_core::glance;
 use island_core::icons::{self, Icon};
@@ -138,6 +139,9 @@ pub struct Scene<'a> {
     pub notice: Option<Notice<'a>>,
     /// With nothing playing, the closed island shows the focus timer.
     pub closed_timer: Option<&'a str>,
+    /// With a song on the island and the focus timer on: its bubble beside
+    /// the island (`None` while it is hidden behind it).
+    pub bubble: Option<Bubble<'a>>,
     /// The glance's content changing in place (a line of lyrics, a notice
     /// ending): the one before leaves as the new one comes in.
     pub swap: Option<Swap<'a>>,
@@ -146,6 +150,23 @@ pub struct Scene<'a> {
     /// What the pointer is over in the open island, and whether it's down.
     pub hot: Option<Hot>,
     pub pressed: bool,
+}
+
+/// The focus timer's bubble beside the closed island: its own small shape
+/// with the timer's icon and the time left.
+pub struct Bubble<'a> {
+    /// Where it is now, in px (ears included).
+    pub rect: Rect,
+    pub outline: &'a Outline,
+    /// From its left edge to its content (the ear), in px.
+    pub inset: f32,
+    /// Without ears, in DIPs (before `islandScale`'s transform).
+    pub size: (f32, f32),
+    pub time: &'a str,
+    pub tint: [f32; 3],
+    pub running: bool,
+    /// How visible it is (0 to 1): it comes out of the island's side.
+    pub alpha: f32,
 }
 
 /// Something in the open island that answers a click.
@@ -2168,6 +2189,32 @@ impl Renderer {
         Ok(())
     }
 
+    /// The focus timer's bubble: its own small body, with the timer's icon
+    /// and the time left (dimmer while paused), at `islandScale` like the
+    /// closed island's content. `ox`, `oy`: the window's px origin.
+    fn draw_bubble(&self, b: &Bubble, s: &Scene, ox: f32, oy: f32) -> Result<()> {
+        let geo = self.geometry(b.outline)?;
+        let (x, y) = (ox + b.rect.x, oy + b.rect.y);
+        let [r, g, bl] = body_color();
+        unsafe {
+            self.dc.SetTransform(&Matrix3x2::translation(x, y));
+            self.fill.SetColor(&D2D1_COLOR_F {
+                r,
+                g,
+                b: bl,
+                a: b.alpha,
+            });
+            self.dc.FillGeometry(&geo, &self.fill, None::<&ID2D1Brush>);
+            self.dc
+                .SetTransform(&affine(s.scale * s.island_scale, x + b.inset, y));
+        }
+        let parts = activity::bubble_parts(b.size.0, b.size.1);
+        self.icon(Icon::Timer, parts.icon, 14.0, b.tint, b.alpha);
+        let ink = if b.running { INK } else { INK_2 };
+        self.numbers(b.time, &self.text.closed, parts.text, WHITE, ink * b.alpha);
+        Ok(())
+    }
+
     /// Redraws the whole window: the island's outline at its body, its
     /// content on top, on a transparent background.
     pub fn draw(&mut self, s: &Scene) -> Result<()> {
@@ -2197,6 +2244,20 @@ impl Renderer {
             top: (s.body.y.floor() as i32 - m).clamp(0, sh - 1),
             right: ((s.body.x + s.body.width).ceil() as i32 + m).clamp(1, sw),
             bottom: ((s.body.y + s.body.height).ceil() as i32 + m).clamp(1, sh),
+        };
+        // The bubble beside it, with the same room around it, is redrawn too.
+        let now = match &s.bubble {
+            Some(b) => RECT {
+                left: now.left.min((b.rect.x.floor() as i32 - m).clamp(0, sw - 1)),
+                top: now.top.min((b.rect.y.floor() as i32 - m).clamp(0, sh - 1)),
+                right: now
+                    .right
+                    .max(((b.rect.x + b.rect.width).ceil() as i32 + m).clamp(1, sw)),
+                bottom: now
+                    .bottom
+                    .max(((b.rect.y + b.rect.height).ceil() as i32 + m).clamp(1, sh)),
+            },
+            None => now,
         };
         let dirty = match self.drawn {
             Some(d) => RECT {
@@ -2244,6 +2305,10 @@ impl Renderer {
                     D2D1_ANTIALIAS_MODE_ALIASED,
                 );
                 self.dc.Clear(Some(&D2D1_COLOR_F::default()));
+                // The focus timer's bubble comes out from behind the body.
+                if let Some(b) = &s.bubble {
+                    self.draw_bubble(b, s, ox, oy)?;
+                }
                 let (bx, by) = (ox + s.body.x, oy + s.body.y);
                 self.dc.SetTransform(&Matrix3x2::translation(bx, by));
                 let [r, g, b] = body_color();
@@ -2457,6 +2522,25 @@ impl Renderer {
                             sh.radius + grow,
                             [0.0; 3],
                             a,
+                        );
+                    }
+                }
+                // The bubble's own, as faint as it is.
+                if let Some(b) = &s.bubble {
+                    let n = (sh.extent / 1.5).ceil().clamp(8.0, 24.0) as u32;
+                    let radius = shape::pill_radius(b.rect.height, s.scale).min(b.rect.width / 2.0);
+                    for i in 0..n {
+                        let (grow, a) = shape::shadow_layer(i, n, sh.extent, sh.alpha);
+                        self.tinted_rounded(
+                            Rect {
+                                x: ox + b.rect.x - grow,
+                                y: oy + b.rect.y + sh.drop - grow,
+                                width: b.rect.width + 2.0 * grow,
+                                height: b.rect.height + 2.0 * grow,
+                            },
+                            radius + grow,
+                            [0.0; 3],
+                            a * b.alpha * b.alpha,
                         );
                     }
                 }
