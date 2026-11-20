@@ -27,7 +27,7 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_PROPERTIES1, D2D1_CAP_STYLE_ROUND, D2D1_DASH_STYLE_CUSTOM,
     D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_DRAW_TEXT_OPTIONS_CLIP,
     D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT, D2D1_ELLIPSE, D2D1_EXTEND_MODE_CLAMP,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2, D2D1_INTERPOLATION_MODE_LINEAR,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
     D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES1,
     D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1CreateFactory,
     ID2D1BitmapBrush1, ID2D1Brush, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1, ID2D1Image,
@@ -95,6 +95,8 @@ pub struct Scene<'a> {
     pub outline: &'a Outline,
     /// The screen's scale (DIPs to px).
     pub scale: f32,
+    /// The island is at rest: its content sits on whole pixels.
+    pub still: bool,
     /// `islandScale`: how much bigger the closed island and its glances are
     /// drawn (the open island isn't). Applied as a transform, not to the
     /// layout's numbers, which stay in DIPs.
@@ -486,6 +488,9 @@ pub struct Renderer {
     visual: IDCompositionVisual,
     /// While the cover travels between views, they leave it out.
     morphing: bool,
+    /// Drawing the island's content at rest: its pieces snap to whole
+    /// pixels (see [`Renderer::snap`]).
+    still: bool,
     surface: Option<(IDCompositionSurface, u32, u32)>,
     /// A pill's shadow window, drawn along with the island.
     shadow: Option<MenuTarget>,
@@ -585,7 +590,7 @@ fn hover(pressed: bool) -> f32 {
 }
 
 /// The cover's corners in the open island; the notification's logo.
-const ART_RADIUS: f32 = 12.0;
+const ART_RADIUS: f32 = 18.0;
 const TOAST_RADIUS: f32 = island_core::notifications::LOGO_RADIUS;
 
 fn white(a: f32) -> D2D1_COLOR_F {
@@ -810,6 +815,7 @@ impl Renderer {
                 view: (0.0, 1.0, 0.0),
                 fit: 1.0,
                 morphing: false,
+                still: false,
                 drawn: None,
                 icons: Default::default(),
                 factory,
@@ -1021,7 +1027,7 @@ impl Renderer {
                 Some(&D2D1_BITMAP_BRUSH_PROPERTIES1 {
                     extendModeX: D2D1_EXTEND_MODE_CLAMP,
                     extendModeY: D2D1_EXTEND_MODE_CLAMP,
-                    interpolationMode: D2D1_INTERPOLATION_MODE_LINEAR,
+                    interpolationMode: D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
                 }),
                 None,
             )?;
@@ -1037,6 +1043,7 @@ impl Renderer {
         if self.morphing {
             return;
         }
+        let r = self.snap(r);
         let rounded = D2D1_ROUNDED_RECT {
             rect: rf(r),
             radiusX: radius,
@@ -1221,7 +1228,47 @@ impl Renderer {
         self.accent.map_or(WHITE, color::vivid)
     }
 
+    /// `r` (in the current transform's space) moved onto whole device
+    /// pixels while the island is at rest: its corner and its size are
+    /// rounded in px, so edges are crisp at any scale. Left alone while
+    /// anything moves, and under a rotation or a mirror.
+    fn snap(&self, r: Rect) -> Rect {
+        if !self.still {
+            return r;
+        }
+        let mut m = Matrix3x2::default();
+        unsafe { self.dc.GetTransform(&mut m) };
+        if m.M12 != 0.0 || m.M21 != 0.0 || m.M11 <= 0.0 || m.M22 <= 0.0 {
+            return r;
+        }
+        let axis = |at: f32, len: f32, k: f32, offset: f32| {
+            if len * k < 0.5 {
+                return (at, len);
+            }
+            let start = (at * k + offset).round();
+            let size = (len * k).round().max(1.0);
+            ((start - offset) / k, size / k)
+        };
+        let (x, width) = axis(r.x, r.width, m.M11, m.M31);
+        let (y, height) = axis(r.y, r.height, m.M22, m.M32);
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
     fn tinted_rounded(&self, r: Rect, radius: f32, [r_, g, b]: [f32; 3], a: f32) {
+        // A capsule stays one when its rect snaps.
+        let half = r.width.min(r.height) / 2.0;
+        let r_snapped = self.snap(r);
+        let radius = if radius >= half - 0.01 {
+            r_snapped.width.min(r_snapped.height) / 2.0
+        } else {
+            radius
+        };
+        let r = r_snapped;
         unsafe {
             self.ink.SetColor(&D2D1_COLOR_F { r: r_, g, b, a });
             self.dc.FillRoundedRectangle(
@@ -1486,7 +1533,13 @@ impl Renderer {
                 self.tinted_rounded(r, ART_RADIUS + g, theme, 0.035 * alpha);
             }
         }
-        self.draw_art(t, art, ART_RADIUS, alpha, s.island_scale.max(1.0) * s.scale);
+        self.draw_art(
+            t,
+            art,
+            layout::art_radius(art.width),
+            alpha,
+            s.island_scale.max(1.0) * s.scale,
+        );
         self.text(&t.title, &self.text.title, shift(p.title, dx), INK * alpha);
         let artist = if t.artist.is_empty() {
             &t.album
@@ -1549,6 +1602,7 @@ impl Renderer {
             let a = if on { INK } else { OFF } * alpha;
             let r = shift(layout::button(b, s.open), dx);
             if b == Button::PlayPause {
+                let r = self.snap(r);
                 // On a disc in the cover's color, the icon in what reads.
                 self.tinted_rounded(r, r.width / 2.0, theme, a);
                 if on {
@@ -1720,7 +1774,7 @@ impl Renderer {
             self.draw_art(
                 t,
                 shift(art, dx),
-                7.0,
+                layout::art_radius(art.width),
                 art_a,
                 s.island_scale.max(1.0) * s.scale,
             );
@@ -1810,12 +1864,14 @@ impl Renderer {
         let r = {
             let r = at(l.logo);
             let side = r.width * grow;
-            Rect {
+            let grown = Rect {
                 x: r.x + (r.width - side) / 2.0,
                 y: r.y + (r.height - side) / 2.0,
                 width: side,
                 height: side,
-            }
+            };
+            // Whole pixels only once it has grown into place.
+            if grow == 1.0 { self.snap(grown) } else { grown }
         };
         // (The lines keep `alpha`, the glance's own, in `line`.)
         let alpha = alpha * logo_a;
@@ -1892,13 +1948,33 @@ impl Renderer {
         let style = unsafe { self.factory.CreateStrokeStyle(&props, None) }
             .and_then(|s| s.cast::<windows::Win32::Graphics::Direct2D::ID2D1StrokeStyle>())
             .ok();
+        // Only inside the island, so the ring is as thick on the straight
+        // sides as on the corners (a stroke shows its inner half: twice as
+        // wide).
+        let params = D2D1_LAYER_PARAMETERS1 {
+            contentBounds: D2D_RECT_F {
+                left: f32::MIN,
+                top: f32::MIN,
+                right: f32::MAX,
+                bottom: f32::MAX,
+            },
+            geometricMask: std::mem::ManuallyDrop::new(geo.cast::<ID2D1Geometry>().ok()),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity: 1.0,
+            opacityBrush: std::mem::ManuallyDrop::new(None),
+            layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+        };
         unsafe {
-            for (width, k) in [(6.0, 0.18), (1.6, 1.0)] {
+            self.dc.PushLayer(&params, None::<&ID2D1Layer>);
+            for (width, k) in [(12.0, 0.18), (3.2, 1.0)] {
                 self.ink.SetColor(&D2D1_COLOR_F { r, g, b, a: a * k });
                 self.dc
                     .DrawGeometry(geo, &self.ink, width * scale, style.as_ref());
             }
+            self.dc.PopLayer();
         }
+        drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
     }
 
     /// Two lights running around the edge, opposite each other, each a
@@ -1996,7 +2072,7 @@ impl Renderer {
         self.draw_art(
             t,
             shift(art, dx),
-            5.0,
+            layout::art_radius(art.width),
             alpha,
             s.island_scale.max(1.0) * s.scale,
         );
@@ -2058,27 +2134,24 @@ impl Renderer {
         // The small view is drawn scaled about its top center; this rect is
         // drawn without that transform, so the scale is baked into it (about
         // the same point), the big end's untouched: the open view never is.
-        let scaled = |r: Rect, dx: f32, radius: f32| {
+        let scaled = |r: Rect, dx: f32| {
             let r = shift(r, dx);
-            (
-                Rect {
-                    x: cx + (r.x - cx) * k,
-                    y: r.y * k,
-                    width: r.width * k,
-                    height: r.height * k,
-                },
-                radius * k,
-            )
+            Rect {
+                x: cx + (r.x - cx) * k,
+                y: r.y * k,
+                width: r.width * k,
+                height: r.height * k,
+            }
         };
-        let (small, radius) = if s.peek_view {
+        let small = if s.peek_view {
             if s.notice.is_some() {
                 return None;
             }
             let dx = (s.size.0 - s.peek_width) / 2.0;
-            scaled(s.sizes.peek_parts(s.peek_width).0, dx, 7.0)
+            scaled(s.sizes.peek_parts(s.peek_width).0, dx)
         } else {
             let dx = (s.size.0 - s.closed_width) / 2.0;
-            scaled(s.sizes.closed_parts(s.closed_width).0, dx, 5.0)
+            scaled(s.sizes.closed_parts(s.closed_width).0, dx)
         };
         // The player's cover where the open view, scaled to the body, has it.
         let fit = open_fit(s);
@@ -2090,15 +2163,13 @@ impl Renderer {
         };
         let e = t * t * (3.0 - 2.0 * t);
         let mix = |a: f32, b: f32| a + (b - a) * e;
-        Some((
-            Rect {
-                x: mix(small.x, big.x),
-                y: mix(small.y, big.y),
-                width: mix(small.width, big.width),
-                height: mix(small.height, big.height),
-            },
-            mix(radius, ART_RADIUS),
-        ))
+        let rect = Rect {
+            x: mix(small.x, big.x),
+            y: mix(small.y, big.y),
+            width: mix(small.width, big.width),
+            height: mix(small.height, big.height),
+        };
+        Some((rect, layout::art_radius(rect.width)))
     }
 
     /// `fit` scales the view further, about the same point: the open one
@@ -2352,14 +2423,16 @@ impl Renderer {
                 };
                 self.dc.SetTransform(&Matrix3x2::translation(bx, by));
                 self.dc.PushLayer(&mask, None::<&ID2D1Layer>);
+                self.still = s.still;
                 let base = affine(s.scale, bx + s.inset, by);
                 self.dc.SetTransform(&base);
+                // The body's own extent (the bodies are whole px at rest).
                 self.dc.PushAxisAlignedClip(
                     &D2D_RECT_F {
                         left: 0.0,
                         top: 0.0,
-                        right: s.size.0,
-                        bottom: s.size.1,
+                        right: (s.body.width - 2.0 * s.inset) / s.scale,
+                        bottom: s.body.height / s.scale,
                     },
                     D2D1_ANTIALIAS_MODE_ALIASED,
                 );
@@ -2398,6 +2471,7 @@ impl Renderer {
                     self.draw_art(t, r, radius, 1.0, s.island_scale.max(1.0) * s.scale);
                 }
                 self.view = (0.0, 1.0, 0.0);
+                self.still = false;
                 self.dc.PopAxisAlignedClip();
                 self.dc.PopLayer();
                 drop(std::mem::ManuallyDrop::into_inner(mask.geometricMask));
@@ -2407,6 +2481,7 @@ impl Renderer {
                 self.dc.SetTarget(None::<&ID2D1Image>);
                 ended
             })();
+            self.still = false;
             surface.EndDraw()?;
             drawn?;
             self.drawn = Some(now);
