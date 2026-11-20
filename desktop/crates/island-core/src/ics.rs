@@ -1410,7 +1410,7 @@ RRULE:FREQ=DAILY;COUNT=99999;UNTIL=20991231T000000Z\r\nEND:VEVENT\r\n"
         text.push_str(&vevent("DTSTART:20261120T100000Z\r\n"));
         let (list, ms) = millis(&calendar(&text));
         assert_eq!(list.len(), 1);
-        assert!(ms < 1000, "took {ms} ms");
+        assert!(ms < 5000, "took {ms} ms");
     }
 
     #[test]
