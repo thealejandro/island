@@ -20,7 +20,11 @@
 //! - `brightness <0-100>`: the built-in screen's brightness, as a power
 //!   notice would tell (the first one is no news).
 //! - `agenda "<title>" <minutes>`: an event's reminder (0: now).
+//! - `focus start|pause|reset|skip`: the focus page's buttons, pressed (the
+//!   timer starts or pauses; the bubble beside a song follows it).
 //! - `open [i]`, `close [i]`: one island (or all) opens or closes.
+//! - `bubble-open [i]`: one island (or all) opens from its focus bubble, as a
+//!   hover or a click on it does (on the focus page, the bubble's rect held).
 //! - `page home|focus`.
 //! - `wait <ms>`; `wait-rest [ms]`: until every island is still (checks it
 //!   stopped where it was going); `idle <ms>`: no frame nor timer at all.
@@ -255,6 +259,18 @@ fn busy(what: String) {
     });
 }
 
+/// Where island `i`'s bubble is now (px, ears included), if it is out.
+fn bubble_now(app: &App, i: usize, body: Rect) -> Option<Rect> {
+    let sf = &app.surfaces[i];
+    let (bw, bh) = app.bubble_dips();
+    let t = (sf.bubble.value / (activity::BUBBLE_GAP + bw)).clamp(0.0, 1.0);
+    let s = sf.scale;
+    (t > 0.0).then(|| {
+        app.frame_at(i)
+            .bubble(body, bw * s, bh * s, activity::BUBBLE_GAP * s, t)
+    })
+}
+
 /// One island drew a frame: traced, checked, filmed.
 pub fn frame(app: &App, i: usize) {
     busy("frame".into());
@@ -299,6 +315,18 @@ pub fn frame(app: &App, i: usize) {
             sf.peek_view as u8,
             sf.shrinking as u8,
         );
+        // 1: the bubble too, while it is out.
+        if let Some(b) = bubble_now(app, i, body)
+            && (b.x < -0.5
+                || b.x + b.width > w.width + 0.5
+                || b.y < -0.5
+                || b.y + b.height > w.height + 0.5)
+        {
+            q.fail(format!(
+                "1 burbuja fuera de la ventana: isla {i}, t {t:.0} ms, burbuja x {:.1} y {:.1} {:.1}x{:.1} px, ventana {}x{} px",
+                b.x, b.y, b.width, b.height, w.width, w.height
+            ));
+        }
         // 1: the body fits its window, every frame.
         if body.x < -0.5
             || body.x + body.width > w.width + 0.5
@@ -561,9 +589,27 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
                 ms,
             );
         }
+        "focus" => {
+            let running = app.timer.running();
+            match cmd.get(1).map(String::as_str) {
+                // Start and pause are the same button: pressed only if the
+                // timer isn't already as asked.
+                Some("start") if !running => app.focus_press(FocusButton::PlayPause),
+                Some("pause") if running => app.focus_press(FocusButton::PlayPause),
+                Some("start" | "pause") => {}
+                Some("reset") => app.focus_press(FocusButton::Reset),
+                Some("skip") => app.focus_press(FocusButton::Skip),
+                _ => return Err("«focus»: start, pause, reset o skip".into()),
+            }
+        }
         "open" | "close" => {
             for i in each(app, cmd) {
                 app.set_open(i, cmd[0] == "open");
+            }
+        }
+        "bubble-open" => {
+            for i in each(app, cmd) {
+                app.open_from_bubble(i);
             }
         }
         "page" => {
@@ -849,6 +895,7 @@ fn shoot(app: &App, i: usize, name: &str) {
         sf.height.value * s,
         sf.width.is_settled(),
     );
+    let bubble = bubble_now(app, i, body);
     // A pill's shadow is its own window of the island's rect: the screen
     // capture takes it in, so it is part of the allowed margin here.
     let shadow = match app.settings.island_style {
@@ -877,6 +924,8 @@ fn shoot(app: &App, i: usize, name: &str) {
             body.x + body.width + m,
             body.y + body.height + m,
         );
+        // The focus timer's bubble is drawn too: allowed in its own box.
+        let bubble = bubble.map(|b| (b.y - m, b.x - m, b.x + b.width + m, b.y + b.height + m));
         let (mut outside, mut far, mut at) = (0u32, 0.0f32, (0, 0));
         for y in 0..g.h {
             for x in 0..g.w {
@@ -888,7 +937,10 @@ fn shoot(app: &App, i: usize, name: &str) {
                     continue;
                 }
                 let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
-                let dist = (l - fx).max(fx - r).max(fy - b).max(t - fy);
+                let mut dist = (l - fx).max(fx - r).max(fy - b).max(t - fy);
+                if let Some((bt, bl, br, bb)) = bubble {
+                    dist = dist.min((bl - fx).max(fx - br).max(fy - bb).max(bt - fy));
+                }
                 if dist > 0.0 {
                     outside += 1;
                     if dist >= far {
