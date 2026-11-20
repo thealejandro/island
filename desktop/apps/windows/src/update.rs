@@ -80,7 +80,7 @@ fn running() -> Option<Version> {
 fn failed(e: NetError) -> Outcome {
     match e {
         NetError::Offline => Outcome::Offline,
-        NetError::Failed => Outcome::Failed,
+        NetError::Failed | NetError::TooBig => Outcome::Failed,
     }
 }
 

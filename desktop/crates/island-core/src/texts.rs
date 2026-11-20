@@ -63,6 +63,8 @@ pub struct Texts {
     pub notification: &'static str,
     /// When a notification arrived: just now.
     pub now: &'static str,
+    /// An event's reminder: how long is left, `{}` minutes.
+    pub event_in: &'static str,
     /// After installing: the glance, and where the island now is.
     pub installed: &'static str,
     pub in_start_menu: &'static str,
@@ -136,6 +138,7 @@ pub const EN: Texts = Texts {
     fully_charged: "Fully charged",
     notification: "Notification",
     now: "now",
+    event_in: "in {} min",
     installed: "Island installed",
     in_start_menu: "In the Start menu",
     install: "Install Island",
@@ -201,6 +204,7 @@ pub const ES: Texts = Texts {
     fully_charged: "Carga completa",
     notification: "Notificación",
     now: "ahora",
+    event_in: "en {} min",
     installed: "Isla instalada",
     in_start_menu: "En el menú Inicio",
     install: "Instalar Island",
@@ -268,6 +272,7 @@ mod tests {
             assert_eq!(t.then_break.matches("{}").count(), 1);
             assert_eq!(t.take_break.matches("{}").count(), 1);
             assert_eq!(t.display_n.matches("{}").count(), 1);
+            assert_eq!(t.event_in.matches("{}").count(), 1);
         }
     }
 
@@ -307,6 +312,7 @@ mod tests {
                 t.volume,
                 t.muted,
                 t.brightness,
+                t.event_in,
                 t.microphone_on,
                 t.microphone_off,
                 t.camera_on,

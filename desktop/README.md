@@ -128,6 +128,9 @@ that isn't valid JSON is ignored until it is fixed.
 | `bluetoothGlance` | `true`, `false` | `true` |
 | `batteryGlance` | `true`, `false` | `true` |
 | `brightnessGlance` | `true`, `false` | `true` |
+| `agendaGlance` | `true`, `false` | `true` |
+| `agendaUrl` | an `https://` or `webcal://` iCalendar link, or empty | empty |
+| `reminderLead` | 0 to 120 (minutes before an event) | `10` |
 | `notificationGlance` | `true`, `false` | `true` |
 | `notificationsInFullScreen` | `here` (over the app), `other` (on another screen's island instead), `hide` (not over it); `true` and `false` still mean `here` and `hide` | `here` |
 | `notificationSound` | `true`, `false` | `true` |
@@ -233,6 +236,22 @@ the island cannot take them over as it does the volume keys. A change
 with no key, click or touch in the 10 s before it (Windows dimming an idle
 screen, or following the room's light) shows nothing.
 `brightnessGlance: false` turns it off.
+
+A few minutes before an event the island glances at it with its title and
+the time left (`reminderLead` minutes, 10 by default; 0 tells it when it
+starts). Each reminder shows once, and today's and tomorrow's are looked at.
+The events are in `%LOCALAPPDATA%\island\events.json`, written by hand: a
+list, or an object with an `events` list, of entries with a `title`, a
+`date` (`2026-11-20`), a `time` (`9:30`, or none for an all-day event, which
+never reminds), and optionally a `repeat` (`weekly`, `monthly` or `yearly`),
+a `remind` of its own in minutes and an `id`. It is read again when it
+changes; entries that make no sense are skipped. `agendaUrl` adds a
+calendar's private iCalendar link (the "secret address" of Google Calendar
+and the like): it is read every 15 minutes, only for the days around now,
+repeating events and time zones included. This is the one thing the agenda
+sends over the network, to that link's own host and nowhere else, and the
+link is never logged or shown by the island. `agendaGlance: false` turns the
+reminders off.
 
 When a notification pops up, the island grows into a glance of its own,
 taller than the song's so the two never pass for each other: the app's
