@@ -91,7 +91,7 @@ impl Form {
 /// How far a pill sits below the screen's edge at `top`, in DIPs.
 pub const PILL_GAP: f32 = 6.0;
 /// The most a pill's corners round, in DIPs: a short body is a full capsule.
-pub const PILL_RADIUS_MOST: f32 = 28.0;
+pub const PILL_RADIUS_MOST: f32 = 36.0;
 /// How far a pill's shadow reaches past its body, in DIPs.
 pub const SHADOW_EXTENT: f32 = 16.0;
 /// How far the shadow falls below the body, in DIPs.
@@ -100,7 +100,7 @@ pub const SHADOW_DROP: f32 = 4.0;
 pub const SHADOW_ALPHA: f32 = 0.30;
 
 /// A pill's corner radius for a body `height` px tall at `scale`: half the
-/// height, up to 28 DIPs. Only a function of the height, so it follows the
+/// height, up to 36 DIPs. Only a function of the height, so it follows the
 /// spring that moves it.
 pub fn pill_radius(height: f32, scale: f32) -> f32 {
     (height.max(0.0) / 2.0).min(PILL_RADIUS_MOST * scale)
@@ -187,18 +187,30 @@ pub fn hanging(width: f32, height: f32, radius: f32, ear: f32) -> Outline {
 /// How far along each edge a smooth corner of `radius` reaches: it eases
 /// in from farther than a circle's would.
 const REACH: f32 = 1.5;
-/// Where its control points sit, as a share of the reach from the corner.
-/// Small: the curve leaves the edges with almost no bend (no visible
-/// kink where a circle's would start) and turns in the middle.
-const PULL: f32 = 1.0 / 6.0;
+/// How far a circle's arc sags from its corner point toward the centre, as
+/// a share of its radius: 1 - 1 / sqrt(2).
+const SAG: f32 = 0.292_893_2;
+
+/// Where a smooth corner's control points sit, as a share of the `reach`
+/// from the corner, so the curve's middle is where a circle of `radius`
+/// has it: 0.4477 when the reach is the radius, 0.1874 at 1.5 times it.
+/// The curve leaves the edges flat and turns in the middle.
+fn pull(reach: f32, radius: f32) -> f32 {
+    if reach <= 0.0 {
+        0.0
+    } else {
+        ((8.0 * SAG * radius / reach - 1.0) / 3.0).clamp(0.0, 1.0)
+    }
+}
 
 /// A smooth corner from where the last segment ended (`reach` before
-/// `corner` along one edge) to `to` (`reach` after it along the other).
-fn corner(from: Point, corner: Point, to: Point) -> Segment {
+/// `corner` along one edge) to `to` (`reach` after it along the other),
+/// its control points `pull` of the way to the corner.
+fn corner(from: Point, corner: Point, to: Point, pull: f32) -> Segment {
     let toward = |p: Point| {
         pt(
-            corner.x + (p.x - corner.x) * PULL,
-            corner.y + (p.y - corner.y) * PULL,
+            corner.x + (p.x - corner.x) * pull,
+            corner.y + (p.y - corner.y) * pull,
         )
     };
     Segment::Cubic {
@@ -208,11 +220,16 @@ fn corner(from: Point, corner: Point, to: Point) -> Segment {
     }
 }
 
+/// The smooth style's corner radius as a share of the body's height.
+pub const SMOOTH_SHARE: f32 = 0.5;
+/// The most the smooth style's corners round, in DIPs.
+pub const SMOOTH_RADIUS_MOST: f32 = 36.0;
+
 /// The smooth style's corner radius for a body `height` px tall at
-/// `scale`: 14 DIPs closed, up to 28 open.
+/// `scale`: half the height, up to 36 DIPs, so a closed island is a
+/// capsule.
 pub fn smooth_radius(height: f32, scale: f32) -> f32 {
-    let s = scale.max(0.01);
-    (0.44 * height / s).clamp(14.0, 28.0) * s
+    (SMOOTH_SHARE * height.max(0.0)).min(SMOOTH_RADIUS_MOST * scale)
 }
 
 /// [`hanging`] with smooth corners and ears: each corner eases out of its
@@ -220,17 +237,20 @@ pub fn smooth_radius(height: f32, scale: f32) -> f32 {
 pub fn hanging_smooth(width: f32, height: f32, radius: f32, ear: f32) -> Outline {
     let (w, h) = (width.max(0.0), height.max(0.0));
     let e = ear.min(h).min(w / 2.0).max(0.0);
-    let l = (radius * REACH).min(h - e).min(w / 2.0).max(0.0);
+    let room = (h - e).min(w / 2.0).max(0.0);
+    let r = radius.min(room).max(0.0);
+    let l = (r * REACH).min(room);
+    let (pe, pb) = (pull(e, e), pull(l, r));
     Outline {
         start: pt(0.0, 0.0),
         segments: vec![
-            corner(pt(0.0, 0.0), pt(e, 0.0), pt(e, e)),
+            corner(pt(0.0, 0.0), pt(e, 0.0), pt(e, e), pe),
             Segment::Line(pt(e, h - l)),
-            corner(pt(e, h - l), pt(e, h), pt(e + l, h)),
+            corner(pt(e, h - l), pt(e, h), pt(e + l, h), pb),
             Segment::Line(pt(e + w - l, h)),
-            corner(pt(e + w - l, h), pt(e + w, h), pt(e + w, h - l)),
+            corner(pt(e + w - l, h), pt(e + w, h), pt(e + w, h - l), pb),
             Segment::Line(pt(e + w, e)),
-            corner(pt(e + w, e), pt(e + w, 0.0), pt(w + 2.0 * e, 0.0)),
+            corner(pt(e + w, e), pt(e + w, 0.0), pt(w + 2.0 * e, 0.0), pe),
         ],
     }
 }
@@ -238,18 +258,21 @@ pub fn hanging_smooth(width: f32, height: f32, radius: f32, ear: f32) -> Outline
 /// [`floating`] with smooth corners; a short body is a soft pill.
 pub fn floating_smooth(width: f32, height: f32, radius: f32) -> Outline {
     let (w, h) = (width.max(0.0), height.max(0.0));
-    let l = (radius * REACH).min(w / 2.0).min(h / 2.0).max(0.0);
+    let room = (w / 2.0).min(h / 2.0).max(0.0);
+    let r = radius.min(room).max(0.0);
+    let l = (r * REACH).min(room);
+    let p = pull(l, r);
     Outline {
         start: pt(l, 0.0),
         segments: vec![
             Segment::Line(pt(w - l, 0.0)),
-            corner(pt(w - l, 0.0), pt(w, 0.0), pt(w, l)),
+            corner(pt(w - l, 0.0), pt(w, 0.0), pt(w, l), p),
             Segment::Line(pt(w, h - l)),
-            corner(pt(w, h - l), pt(w, h), pt(w - l, h)),
+            corner(pt(w, h - l), pt(w, h), pt(w - l, h), p),
             Segment::Line(pt(l, h)),
-            corner(pt(l, h), pt(0.0, h), pt(0.0, h - l)),
+            corner(pt(l, h), pt(0.0, h), pt(0.0, h - l), p),
             Segment::Line(pt(0.0, l)),
-            corner(pt(0.0, l), pt(0.0, 0.0), pt(l, 0.0)),
+            corner(pt(0.0, l), pt(0.0, 0.0), pt(l, 0.0), p),
         ],
     }
 }
@@ -277,6 +300,20 @@ pub fn outline(
         (Style::Smooth, true) => hanging_smooth(width, height, smooth_radius(height, scale), ear),
         (Style::Smooth, false) => floating_smooth(width, height, smooth_radius(height, scale)),
     }
+}
+
+/// Px rows of a hanging body's ear for the window region: how far row `y`
+/// reaches outside the body's side, 1 px past the outline so its
+/// antialiasing isn't cut.
+pub fn ear_rows(ear: f32) -> Vec<i32> {
+    let e = ear.max(0.0);
+    let most = e.ceil() as i32;
+    (0..most)
+        .map(|y| {
+            let d = e - y as f32;
+            ((e - (e * e - d * d).max(0.0).sqrt()).ceil() as i32 + 1).min(most)
+        })
+        .collect()
 }
 
 /// A rounded rectangle at (0, 0).
@@ -659,11 +696,166 @@ mod tests {
 
     #[test]
     fn the_smooth_radius_grows_with_the_body() {
-        assert_eq!(smooth_radius(30.0, 1.0), 14.0);
-        assert_eq!(smooth_radius(180.0, 1.0), 28.0);
-        assert!((smooth_radius(50.0, 1.0) - 22.0).abs() < 1e-4);
-        // In DIPs: twice the pixels at twice the scale.
-        assert_eq!(smooth_radius(60.0, 2.0), 28.0);
+        for (h, s, r) in [
+            (32.0, 1.0, 16.0),
+            (44.0, 1.0, 22.0),
+            (72.0, 1.0, 36.0),
+            (208.0, 1.0, 36.0),
+            (64.0, 2.0, 32.0),
+            (10.0, 1.0, 5.0),
+        ] {
+            assert_eq!(smooth_radius(h, s), r, "{h} at {s}");
+        }
+        let mut h = 0.0;
+        while h < 300.0 {
+            let (a, b) = (smooth_radius(h, 1.0), smooth_radius(h + 1.0, 1.0));
+            assert!(b >= a && b - a <= 0.5 + 1e-4, "{h}");
+            h += 1.0;
+        }
+    }
+
+    /// A point on a cubic Bézier at `t`.
+    fn cubic_at(p0: Point, c1: Point, c2: Point, p3: Point, t: f32) -> Point {
+        let u = 1.0 - t;
+        let f = |a: f32, b: f32, c: f32, d: f32| {
+            u * u * u * a + 3.0 * u * u * t * b + 3.0 * u * t * t * c + t * t * t * d
+        };
+        pt(f(p0.x, c1.x, c2.x, p3.x), f(p0.y, c1.y, c2.y, p3.y))
+    }
+
+    /// Where segment `i` of `o` starts.
+    fn start_of(o: &Outline, i: usize) -> Point {
+        if i == 0 {
+            o.start
+        } else {
+            end(&Outline {
+                start: o.start,
+                segments: o.segments[..i].to_vec(),
+            })
+        }
+    }
+
+    fn dist(a: Point, b: Point) -> f32 {
+        ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
+    }
+
+    #[test]
+    fn a_smooth_corner_without_room_is_a_circle() {
+        let o = floating_smooth(180.0, 32.0, 16.0);
+        assert_eq!(o.start, pt(16.0, 0.0));
+        // The top right corner's circle is centred at (164, 16).
+        let Segment::Cubic { c1, c2, to } = o.segments[1] else {
+            panic!("{:?}", o.segments[1]);
+        };
+        let centre = pt(164.0, 16.0);
+        for i in 1..10 {
+            let p = cubic_at(pt(164.0, 0.0), c1, c2, to, i as f32 / 10.0);
+            assert!((dist(p, centre) - 16.0).abs() < 0.02, "t={i}: {p:?}");
+        }
+    }
+
+    #[test]
+    fn a_smooth_corner_passes_where_its_circle_does() {
+        let o = hanging_smooth(560.0, 180.0, 28.0, 10.0);
+        let Segment::Cubic { c1, c2, to } = o.segments[2] else {
+            panic!("{:?}", o.segments[2]);
+        };
+        let from = start_of(&o, 2);
+        let mid = cubic_at(from, c1, c2, to, 0.5);
+        assert!((mid.x - (10.0 + SAG * 28.0)).abs() < 1e-3, "{mid:?}");
+        assert!((mid.y - (180.0 - SAG * 28.0)).abs() < 1e-3, "{mid:?}");
+    }
+
+    #[test]
+    fn ears_are_quarter_circles() {
+        let e = 10.0;
+        for o in [
+            hanging(200.0, 32.0, 18.0, e),
+            hanging_smooth(200.0, 32.0, 16.0, e),
+        ] {
+            let from = o.start;
+            let centre = pt(0.0, e);
+            match o.segments[0] {
+                Segment::Arc { to, radius, .. } => {
+                    assert_eq!((to, radius), (pt(e, e), e));
+                }
+                Segment::Cubic { c1, c2, to } => {
+                    for i in 1..10 {
+                        let p = cubic_at(from, c1, c2, to, i as f32 / 10.0);
+                        assert!((dist(p, centre) - e).abs() < 0.02, "t={i}: {p:?}");
+                    }
+                }
+                Segment::Line(_) => panic!("an ear is not a line"),
+            }
+        }
+    }
+
+    #[test]
+    fn ear_rows_cover_the_ear() {
+        for e in [10.0f32, 13.0, 15.0, 18.0, 20.0] {
+            let rows = ear_rows(e);
+            assert_eq!(rows.len(), e.ceil() as usize);
+            assert_eq!(rows[0], e.ceil() as i32);
+            assert!(rows.windows(2).all(|w| w[1] <= w[0]), "{rows:?}");
+            // Sampled ear points, as the outline draws them: (x, y) from the
+            // outer edge, `e - x` outside the body's side.
+            for o in [
+                hanging(200.0, 40.0, 18.0, e),
+                hanging_smooth(200.0, 40.0, 16.0, e),
+            ] {
+                let from = o.start;
+                let pts: Vec<Point> = match o.segments[0] {
+                    Segment::Arc { .. } => (0..=20)
+                        .map(|i| {
+                            let a = i as f32 / 20.0 * std::f32::consts::FRAC_PI_2;
+                            pt(e * a.sin(), e - e * a.cos())
+                        })
+                        .collect(),
+                    Segment::Cubic { c1, c2, to } => (0..=20)
+                        .map(|i| cubic_at(from, c1, c2, to, i as f32 / 20.0))
+                        .collect(),
+                    Segment::Line(_) => unreachable!(),
+                };
+                for p in pts {
+                    let y = (p.y.floor() as usize).min(rows.len() - 1);
+                    assert!(e - p.x <= rows[y] as f32 + 1e-3, "e={e} {p:?} row {y}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bodies_at_rest_sit_on_whole_px() {
+        for scale in [1.0f32, 1.25, 1.5, 1.75, 2.0] {
+            for p in PLACEMENTS {
+                for form in [Form::Notch, Form::Pill] {
+                    let fr = Frame {
+                        placement: p,
+                        form,
+                        ear: (10.0 * scale).round(),
+                        margin: 8.0 * scale,
+                        gap: 6.0 * scale,
+                        shadow: 20.0 * scale,
+                    };
+                    let (bw, bh) = ((180.0 * scale).round(), (32.0 * scale).round());
+                    let win = fr.window(
+                        Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 1920.0,
+                            height: 1080.0,
+                        },
+                        560.0 * scale,
+                        180.0 * scale,
+                    );
+                    let b = fr.body(win.width.ceil(), bw, bh, true);
+                    let ctx = format!("{p:?} {form:?} x{scale}");
+                    assert_eq!(b.x, b.x.round(), "{ctx}");
+                    assert_eq!(b.y, b.y.round(), "{ctx}");
+                    assert_eq!(b.width, b.width.round(), "{ctx}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -767,9 +959,10 @@ mod tests {
             (32.0, 1.0, 16.0),
             (44.0, 1.0, 22.0),
             (56.0, 1.0, 28.0),
-            (180.0, 1.0, 28.0),
+            (72.0, 1.0, 36.0),
+            (180.0, 1.0, 36.0),
             (64.0, 2.0, 32.0),
-            (400.0, 2.0, 56.0),
+            (400.0, 2.0, 72.0),
             (-3.0, 1.0, 0.0),
         ] {
             assert_eq!(pill_radius(h, s), r, "{h} at {s}");
