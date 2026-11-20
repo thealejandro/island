@@ -269,6 +269,107 @@ const WM_APP_INSTALL_FAILED: u32 = WM_APP + 17;
 const WM_APP_KEY: u32 = WM_APP + 18;
 /// A check for updates ended (`update::Updater`).
 const WM_APP_UPDATE: u32 = WM_APP + 19;
+/// Another window came to the front: the islands may have been put under
+/// the ordinary windows by another app (a tiling window manager).
+const WM_APP_ZORDER: u32 = WM_APP + 23;
+
+/// The hook that tells of windows coming to the front (0: none).
+static ZORDER_HOOK: AtomicIsize = AtomicIsize::new(0);
+/// `WM_APP_ZORDER` is asked for and not handled yet: one is enough.
+static ZORDER_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// A window came to the front (out of context: on the thread that
+/// installed the hook, through its messages). Only passes it on.
+unsafe extern "system" fn foreground_changed(
+    _: windows::Win32::UI::Accessibility::HWINEVENTHOOK,
+    _: u32,
+    _: HWND,
+    _: i32,
+    _: i32,
+    _: u32,
+    _: u32,
+) {
+    if !ZORDER_PENDING.swap(true, Relaxed) {
+        let anchor = HWND(ANCHOR.load(Relaxed) as *mut _);
+        unsafe {
+            if PostMessageW(Some(anchor), WM_APP_ZORDER, WPARAM(0), LPARAM(0)).is_err() {
+                ZORDER_PENDING.store(false, Relaxed);
+            }
+        }
+    }
+}
+
+/// Follows the front window, on this thread. Call once, after the anchor.
+fn follow_foreground() {
+    use windows::Win32::UI::Accessibility::SetWinEventHook;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+    };
+    let hook = unsafe {
+        SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            None,
+            Some(foreground_changed),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        )
+    };
+    ZORDER_HOOK.store(hook.0 as isize, Relaxed);
+}
+
+/// Ends [`follow_foreground`].
+fn unfollow_foreground() {
+    use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, UnhookWinEvent};
+    let hook = ZORDER_HOOK.swap(0, Relaxed);
+    if hook != 0 {
+        unsafe {
+            let _ = UnhookWinEvent(HWINEVENTHOOK(hook as *mut _));
+        }
+    }
+}
+
+/// A window is under an ordinary one if any of those above it (as
+/// `(visible, topmost)`) is visible and not topmost.
+fn is_buried(above: impl IntoIterator<Item = (bool, bool)>) -> bool {
+    above
+        .into_iter()
+        .any(|(visible, topmost)| visible && !topmost)
+}
+
+/// `hwnd` has a visible window above it that is not topmost. Cloaked
+/// windows (other virtual desktops, a window manager's hidden workspaces)
+/// don't count: they aren't on screen.
+fn buried(hwnd: HWND) -> bool {
+    use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GW_HWNDPREV, GWL_EXSTYLE, GetWindow, GetWindowLongPtrW, IsWindowVisible,
+    };
+    let shown = |w: HWND| unsafe {
+        let mut cloaked = 0u32;
+        IsWindowVisible(w).as_bool()
+            && (DwmGetWindowAttribute(
+                w,
+                DWMWA_CLOAKED,
+                &mut cloaked as *mut u32 as *mut _,
+                size_of::<u32>() as u32,
+            )
+            .is_err()
+                || cloaked == 0)
+    };
+    is_buried(
+        std::iter::successors(unsafe { GetWindow(hwnd, GW_HWNDPREV) }.ok(), |&w| unsafe {
+            GetWindow(w, GW_HWNDPREV).ok()
+        })
+        .map(|w| unsafe {
+            (
+                shown(w),
+                GetWindowLongPtrW(w, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0,
+            )
+        }),
+    )
+}
 
 const ISLAND_CLASS: PCWSTR = w!("IslandWindow");
 /// The hidden window the shared things talk to: the sources (media, volume,
@@ -352,6 +453,10 @@ const THEME_WAIT_MS: u32 = 150;
 /// When the next event's reminder is due (one shot, set again each time).
 const AGENDA_TIMER: usize = 10;
 const THEME_TRIES: u8 = 3;
+/// Once, a little after another window came to the front: a window manager
+/// may reorder the windows after the event (one shot).
+const ZORDER_TIMER: usize = 11;
+const ZORDER_WAIT_MS: u32 = 300;
 /// The wheel changes the focus length by this many minutes.
 const WHEEL_MINUTES: i32 = 5;
 // The menu's items.
@@ -1959,6 +2064,51 @@ impl App {
         self.notify(n, ms);
     }
 
+    /// Puts back on top the islands that another app has put under the
+    /// ordinary windows, with their shadows just below them. Only the ones
+    /// showing (SWP_SHOWWINDOW is never asked for, so a hidden one stays
+    /// hidden), and without taking the focus.
+    fn keep_on_top(&self) {
+        use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+        for sf in &self.surfaces {
+            if !unsafe { IsWindowVisible(sf.hwnd) }.as_bool() || !buried(sf.hwnd) {
+                continue;
+            }
+            unsafe {
+                let _ = SetWindowPos(
+                    sf.hwnd,
+                    Some(HWND_TOPMOST),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+                );
+                if let Some(h) = sf.shadow_hwnd {
+                    let _ = SetWindowPos(
+                        h,
+                        Some(sf.hwnd),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+                    );
+                }
+            }
+        }
+    }
+
+    /// A window came to the front: the islands are checked now, and once
+    /// more shortly after, as a window manager may reorder after the event.
+    fn foreground_changed(&self) {
+        ZORDER_PENDING.store(false, Relaxed);
+        self.keep_on_top();
+        unsafe {
+            SetTimer(Some(self.anchor), ZORDER_TIMER, ZORDER_WAIT_MS, None);
+        }
+    }
+
     /// A notification's glance over a full-screen app: an island hidden
     /// under it comes out for the glance, and goes on top again (a
     /// full-screen window may have gone over it), without taking the
@@ -2899,6 +3049,13 @@ impl App {
                 }
             }
             WM_APP_NOTIFICATION => self.notified(),
+            WM_APP_ZORDER => self.foreground_changed(),
+            WM_TIMER if wp.0 == ZORDER_TIMER => {
+                unsafe {
+                    let _ = KillTimer(Some(self.anchor), ZORDER_TIMER);
+                }
+                self.keep_on_top();
+            }
             WM_APP_SPEAKERS => self.speakers_changed(),
             // A move over it comes as a few changes: one read once they end.
             WM_APP_THEME => unsafe {
@@ -4228,11 +4385,15 @@ fn main() -> Result<()> {
         } else {
             let _ = PostMessageW(Some(anchor), WM_APP_OFFER, WPARAM(0), LPARAM(0));
         }
+        if !qa_mode() {
+            follow_foreground();
+        }
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+        unfollow_foreground();
         // Takes the tray icon away too, if it is still there.
         APP.with_borrow_mut(|a| *a = None);
         #[cfg(feature = "qa")]
@@ -4241,4 +4402,17 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_buried;
+
+    #[test]
+    fn buried_only_under_a_visible_ordinary_window() {
+        assert!(!is_buried([]));
+        // Topmost windows above are fine, and so are hidden ordinary ones.
+        assert!(!is_buried([(true, true), (false, false), (false, true)]));
+        assert!(is_buried([(true, true), (true, false)]));
+    }
 }
