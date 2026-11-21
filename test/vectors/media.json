@@ -1,0 +1,489 @@
+[
+  {
+    "fn": "fit_width",
+    "args": [
+      960,
+      1920
+    ],
+    "expect": 960
+  },
+  {
+    "fn": "fit_width",
+    "args": [
+      960,
+      1280
+    ],
+    "expect": 760
+  },
+  {
+    "fn": "fit_width",
+    "args": [
+      960,
+      1024
+    ],
+    "expect": 610
+  },
+  {
+    "fn": "fit_width",
+    "args": [
+      960,
+      1000
+    ],
+    "expect": 600
+  },
+  {
+    "fn": "fit_width",
+    "args": [
+      960,
+      800
+    ],
+    "expect": 480
+  },
+  {
+    "fn": "fit_width",
+    "args": [
+      560,
+      1920
+    ],
+    "expect": 560
+  },
+  {
+    "fn": "fit_width",
+    "args": [
+      560,
+      3840
+    ],
+    "expect": 560
+  },
+  {
+    "fn": "fit_width",
+    "args": [
+      560,
+      1366
+    ],
+    "expect": 560
+  },
+  {
+    "fn": "fit_width",
+    "args": [
+      480,
+      1920
+    ],
+    "expect": 480
+  },
+  {
+    "fn": "fit_width",
+    "args": [
+      500,
+      900
+    ],
+    "expect": 500
+  },
+  {
+    "fn": "fit_width",
+    "args": [
+      560,
+      400
+    ],
+    "expect": 400
+  },
+  {
+    "fn": "fit_width",
+    "args": [
+      560,
+      0
+    ],
+    "expect": 0
+  },
+  {
+    "fn": "fit_width",
+    "args": [
+      960,
+      1
+    ],
+    "expect": 1
+  },
+  {
+    "fn": "fit_width",
+    "args": [
+      560,
+      700
+    ],
+    "expect": 480,
+    "skip": {
+      "js": "the smallest open width is 480 in the core and 420 in the plugin (kept for settings saved before the desktop apps)"
+    }
+  },
+  {
+    "fn": "fit_width",
+    "args": [
+      560,
+      750
+    ],
+    "expect": 480,
+    "skip": {
+      "js": "the smallest open width is 480 in the core and 420 in the plugin (kept for settings saved before the desktop apps)"
+    }
+  },
+  {
+    "fn": "fit_width",
+    "args": [
+      480,
+      600
+    ],
+    "expect": 480,
+    "skip": {
+      "js": "the smallest open width is 480 in the core and 420 in the plugin (kept for settings saved before the desktop apps)"
+    }
+  },
+  {
+    "fn": "fit_width",
+    "args": [
+      960,
+      760
+    ],
+    "expect": 480,
+    "skip": {
+      "js": "the smallest open width is 480 in the core and 420 in the plugin (kept for settings saved before the desktop apps)"
+    }
+  },
+  {
+    "fn": "fit_width",
+    "args": [
+      560,
+      480
+    ],
+    "expect": 480,
+    "skip": {
+      "js": "the smallest open width is 480 in the core and 420 in the plugin (kept for settings saved before the desktop apps)"
+    }
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "Canción",
+      "Alguien",
+      "title-artist"
+    ],
+    "expect": "Canción  ·  Alguien"
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "Canción",
+      "",
+      "title-artist"
+    ],
+    "expect": "Canción"
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "",
+      "Alguien",
+      "title-artist"
+    ],
+    "expect": "Alguien"
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "",
+      "",
+      "title-artist"
+    ],
+    "expect": ""
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "A",
+      "A",
+      "title-artist"
+    ],
+    "expect": "A  ·  A"
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "Con  espacios",
+      "Y · punto",
+      "title-artist"
+    ],
+    "expect": "Con  espacios  ·  Y · punto"
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "Canción",
+      "Alguien",
+      "artist-title"
+    ],
+    "expect": "Alguien  ·  Canción"
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "Canción",
+      "",
+      "artist-title"
+    ],
+    "expect": "Canción"
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "",
+      "Alguien",
+      "artist-title"
+    ],
+    "expect": "Alguien"
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "",
+      "",
+      "artist-title"
+    ],
+    "expect": ""
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "A",
+      "A",
+      "artist-title"
+    ],
+    "expect": "A  ·  A"
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "Con  espacios",
+      "Y · punto",
+      "artist-title"
+    ],
+    "expect": "Y · punto  ·  Con  espacios"
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "Canción",
+      "Alguien",
+      "title"
+    ],
+    "expect": "Canción"
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "Canción",
+      "",
+      "title"
+    ],
+    "expect": "Canción"
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "",
+      "Alguien",
+      "title"
+    ],
+    "expect": ""
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "",
+      "",
+      "title"
+    ],
+    "expect": ""
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "A",
+      "A",
+      "title"
+    ],
+    "expect": "A"
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "Con  espacios",
+      "Y · punto",
+      "title"
+    ],
+    "expect": "Con  espacios"
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "Canción",
+      "Alguien",
+      "artist"
+    ],
+    "expect": "Alguien"
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "Canción",
+      "",
+      "artist"
+    ],
+    "expect": "Canción"
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "",
+      "Alguien",
+      "artist"
+    ],
+    "expect": "Alguien"
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "",
+      "",
+      "artist"
+    ],
+    "expect": ""
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "A",
+      "A",
+      "artist"
+    ],
+    "expect": "A"
+  },
+  {
+    "fn": "song_line",
+    "args": [
+      "Con  espacios",
+      "Y · punto",
+      "artist"
+    ],
+    "expect": "Y · punto"
+  },
+  {
+    "fn": "lyric_alpha",
+    "args": [
+      -10
+    ],
+    "expect": 0.16
+  },
+  {
+    "fn": "lyric_alpha",
+    "args": [
+      -3
+    ],
+    "expect": 0.16
+  },
+  {
+    "fn": "lyric_alpha",
+    "args": [
+      -2
+    ],
+    "expect": 0.16
+  },
+  {
+    "fn": "lyric_alpha",
+    "args": [
+      -1.5
+    ],
+    "expect": 0.16
+  },
+  {
+    "fn": "lyric_alpha",
+    "args": [
+      -1
+    ],
+    "expect": 0.38
+  },
+  {
+    "fn": "lyric_alpha",
+    "args": [
+      -0.5
+    ],
+    "expect": 0.69
+  },
+  {
+    "fn": "lyric_alpha",
+    "args": [
+      -0.25
+    ],
+    "expect": 0.845
+  },
+  {
+    "fn": "lyric_alpha",
+    "args": [
+      0
+    ],
+    "expect": 1
+  },
+  {
+    "fn": "lyric_alpha",
+    "args": [
+      0.25
+    ],
+    "expect": 0.895
+  },
+  {
+    "fn": "lyric_alpha",
+    "args": [
+      0.5
+    ],
+    "expect": 0.79
+  },
+  {
+    "fn": "lyric_alpha",
+    "args": [
+      1
+    ],
+    "expect": 0.58
+  },
+  {
+    "fn": "lyric_alpha",
+    "args": [
+      1.5
+    ],
+    "expect": 0.37
+  },
+  {
+    "fn": "lyric_alpha",
+    "args": [
+      2
+    ],
+    "expect": 0.2
+  },
+  {
+    "fn": "lyric_alpha",
+    "args": [
+      3
+    ],
+    "expect": 0.2
+  },
+  {
+    "fn": "lyric_alpha",
+    "args": [
+      5
+    ],
+    "expect": 0.2
+  },
+  {
+    "fn": "lyric_alpha",
+    "args": [
+      10
+    ],
+    "expect": 0.2
+  }
+]

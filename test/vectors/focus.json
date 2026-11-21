@@ -1,0 +1,929 @@
+[
+  {
+    "fn": "run",
+    "args": [
+      {
+        "focus": 25,
+        "break": 5,
+        "longBreak": 15,
+        "every": 4
+      },
+      [
+        {
+          "op": "toggle",
+          "now": 0
+        },
+        {
+          "op": "toggle",
+          "now": 600000
+        },
+        {
+          "op": "toggle",
+          "now": 1200000
+        },
+        {
+          "op": "toggle",
+          "now": 1230000
+        },
+        {
+          "op": "finish",
+          "now": 1230000
+        }
+      ]
+    ],
+    "expect": [
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 1500000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": false,
+        "left": 900000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 900000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": false,
+        "left": 870000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": false,
+        "left": 870000,
+        "active": true
+      }
+    ]
+  },
+  {
+    "fn": "run",
+    "args": [
+      {
+        "focus": 5,
+        "break": 1,
+        "longBreak": 5,
+        "every": 2
+      },
+      [
+        {
+          "op": "toggle",
+          "now": 0
+        },
+        {
+          "op": "finish",
+          "now": 299999
+        },
+        {
+          "op": "finish",
+          "now": 300000
+        },
+        {
+          "op": "finish",
+          "now": 360000
+        },
+        {
+          "op": "toggle",
+          "now": 361000
+        },
+        {
+          "op": "finish",
+          "now": 660999
+        },
+        {
+          "op": "finish",
+          "now": 661000
+        },
+        {
+          "op": "finish",
+          "now": 961000
+        },
+        {
+          "op": "toggle",
+          "now": 962000
+        },
+        {
+          "op": "finish",
+          "now": 1261999
+        },
+        {
+          "op": "finish",
+          "now": 1262000
+        },
+        {
+          "op": "finish",
+          "now": 1562000
+        }
+      ]
+    ],
+    "expect": [
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 300000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 1,
+        "active": true
+      },
+      {
+        "phase": "break",
+        "rounds": 1,
+        "running": true,
+        "left": 60000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 1,
+        "running": false,
+        "left": 300000,
+        "active": false
+      },
+      {
+        "phase": "focus",
+        "rounds": 1,
+        "running": true,
+        "left": 300000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 1,
+        "running": true,
+        "left": 1,
+        "active": true
+      },
+      {
+        "phase": "longBreak",
+        "rounds": 2,
+        "running": true,
+        "left": 300000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": false,
+        "left": 300000,
+        "active": false
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 300000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 1,
+        "active": true
+      },
+      {
+        "phase": "break",
+        "rounds": 1,
+        "running": true,
+        "left": 60000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 1,
+        "running": false,
+        "left": 300000,
+        "active": false
+      }
+    ]
+  },
+  {
+    "fn": "run",
+    "args": [
+      {
+        "focus": 25,
+        "break": 5,
+        "longBreak": 15,
+        "every": 4
+      },
+      [
+        {
+          "op": "toggle",
+          "now": 0
+        },
+        {
+          "op": "finish",
+          "now": 1500000
+        },
+        {
+          "op": "finish",
+          "now": 2400000
+        },
+        {
+          "op": "toggle",
+          "now": 2400000
+        },
+        {
+          "op": "finish",
+          "now": 3900000
+        },
+        {
+          "op": "finish",
+          "now": 4800000
+        },
+        {
+          "op": "toggle",
+          "now": 4800000
+        },
+        {
+          "op": "finish",
+          "now": 6300000
+        },
+        {
+          "op": "finish",
+          "now": 7200000
+        },
+        {
+          "op": "toggle",
+          "now": 7200000
+        },
+        {
+          "op": "finish",
+          "now": 8700000
+        },
+        {
+          "op": "finish",
+          "now": 9600000
+        }
+      ]
+    ],
+    "expect": [
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 1500000,
+        "active": true
+      },
+      {
+        "phase": "break",
+        "rounds": 1,
+        "running": true,
+        "left": 300000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 1,
+        "running": false,
+        "left": 1500000,
+        "active": false
+      },
+      {
+        "phase": "focus",
+        "rounds": 1,
+        "running": true,
+        "left": 1500000,
+        "active": true
+      },
+      {
+        "phase": "break",
+        "rounds": 2,
+        "running": true,
+        "left": 300000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 2,
+        "running": false,
+        "left": 1500000,
+        "active": false
+      },
+      {
+        "phase": "focus",
+        "rounds": 2,
+        "running": true,
+        "left": 1500000,
+        "active": true
+      },
+      {
+        "phase": "break",
+        "rounds": 3,
+        "running": true,
+        "left": 300000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 3,
+        "running": false,
+        "left": 1500000,
+        "active": false
+      },
+      {
+        "phase": "focus",
+        "rounds": 3,
+        "running": true,
+        "left": 1500000,
+        "active": true
+      },
+      {
+        "phase": "longBreak",
+        "rounds": 4,
+        "running": true,
+        "left": 900000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": false,
+        "left": 1500000,
+        "active": false
+      }
+    ]
+  },
+  {
+    "fn": "run",
+    "args": [
+      {
+        "focus": 5,
+        "break": 1,
+        "longBreak": 5,
+        "every": 2
+      },
+      [
+        {
+          "op": "toggle",
+          "now": 0
+        },
+        {
+          "op": "skip",
+          "now": 1000
+        },
+        {
+          "op": "skip",
+          "now": 2000
+        },
+        {
+          "op": "skip",
+          "now": 3000
+        },
+        {
+          "op": "skip",
+          "now": 4000
+        },
+        {
+          "op": "skip",
+          "now": 5000
+        },
+        {
+          "op": "skip",
+          "now": 6000
+        }
+      ]
+    ],
+    "expect": [
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 300000,
+        "active": true
+      },
+      {
+        "phase": "break",
+        "rounds": 1,
+        "running": true,
+        "left": 60000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 1,
+        "running": false,
+        "left": 300000,
+        "active": false
+      },
+      {
+        "phase": "longBreak",
+        "rounds": 2,
+        "running": false,
+        "left": 300000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": false,
+        "left": 300000,
+        "active": false
+      },
+      {
+        "phase": "break",
+        "rounds": 1,
+        "running": false,
+        "left": 60000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 1,
+        "running": false,
+        "left": 300000,
+        "active": false
+      }
+    ]
+  },
+  {
+    "fn": "run",
+    "args": [
+      {
+        "focus": 25,
+        "break": 5,
+        "longBreak": 15,
+        "every": 4
+      },
+      [
+        {
+          "op": "skip",
+          "now": 0
+        },
+        {
+          "op": "skip",
+          "now": 1000
+        },
+        {
+          "op": "toggle",
+          "now": 2000
+        },
+        {
+          "op": "skip",
+          "now": 3000
+        }
+      ]
+    ],
+    "expect": [
+      {
+        "phase": "break",
+        "rounds": 1,
+        "running": false,
+        "left": 300000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 1,
+        "running": false,
+        "left": 1500000,
+        "active": false
+      },
+      {
+        "phase": "focus",
+        "rounds": 1,
+        "running": true,
+        "left": 1500000,
+        "active": true
+      },
+      {
+        "phase": "break",
+        "rounds": 2,
+        "running": true,
+        "left": 300000,
+        "active": true
+      }
+    ]
+  },
+  {
+    "fn": "run",
+    "args": [
+      {
+        "focus": 25,
+        "break": 5,
+        "longBreak": 15,
+        "every": 4
+      },
+      [
+        {
+          "op": "toggle",
+          "now": 0
+        },
+        {
+          "op": "finish",
+          "now": 12300000
+        },
+        {
+          "op": "finish",
+          "now": 12900000
+        }
+      ]
+    ],
+    "expect": [
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 1500000,
+        "active": true
+      },
+      {
+        "phase": "break",
+        "rounds": 1,
+        "running": true,
+        "left": 299000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 1,
+        "running": false,
+        "left": 1500000,
+        "active": false
+      }
+    ]
+  },
+  {
+    "fn": "run",
+    "args": [
+      {
+        "focus": 25,
+        "break": 5,
+        "longBreak": 15,
+        "every": 4
+      },
+      [
+        {
+          "op": "toggle",
+          "now": 0
+        },
+        {
+          "op": "finish",
+          "now": 600000
+        },
+        {
+          "op": "finish",
+          "now": 1499999
+        }
+      ]
+    ],
+    "expect": [
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 1500000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 900000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 1,
+        "active": true
+      }
+    ]
+  },
+  {
+    "fn": "run",
+    "args": [
+      {
+        "focus": 25,
+        "break": 5,
+        "longBreak": 15,
+        "every": 4
+      },
+      [
+        {
+          "op": "toggle",
+          "now": 0
+        },
+        {
+          "op": "toggle",
+          "now": 180000
+        },
+        {
+          "op": "reset",
+          "now": 240000
+        },
+        {
+          "op": "toggle",
+          "now": 300000
+        }
+      ]
+    ],
+    "expect": [
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 1500000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": false,
+        "left": 1320000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": false,
+        "left": 1500000,
+        "active": false
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 1500000,
+        "active": true
+      }
+    ]
+  },
+  {
+    "fn": "run",
+    "args": [
+      {
+        "focus": 25,
+        "break": 5,
+        "longBreak": 15,
+        "every": 4
+      },
+      [
+        {
+          "op": "lengths",
+          "now": 0,
+          "lengths": {
+            "focus": 50,
+            "break": 10,
+            "longBreak": 30,
+            "every": 3
+          }
+        },
+        {
+          "op": "toggle",
+          "now": 1000
+        },
+        {
+          "op": "lengths",
+          "now": 2000,
+          "lengths": {
+            "focus": 25,
+            "break": 5,
+            "longBreak": 15,
+            "every": 4
+          }
+        },
+        {
+          "op": "toggle",
+          "now": 3000
+        },
+        {
+          "op": "lengths",
+          "now": 4000,
+          "lengths": {
+            "focus": 25,
+            "break": 5,
+            "longBreak": 15,
+            "every": 4
+          }
+        }
+      ]
+    ],
+    "expect": [
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": false,
+        "left": 3000000,
+        "active": false
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 3000000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 2999000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": false,
+        "left": 2998000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": false,
+        "left": 2998000,
+        "active": true
+      }
+    ]
+  },
+  {
+    "fn": "run",
+    "args": [
+      {
+        "focus": 25,
+        "break": 5,
+        "longBreak": 15,
+        "every": 4
+      },
+      [
+        {
+          "op": "toggle",
+          "now": 0
+        },
+        {
+          "op": "toggle",
+          "now": 60000
+        },
+        {
+          "op": "lengths",
+          "now": 60000,
+          "lengths": {
+            "focus": 50,
+            "break": 10,
+            "longBreak": 30,
+            "every": 3
+          }
+        },
+        {
+          "op": "reset",
+          "now": 120000
+        },
+        {
+          "op": "lengths",
+          "now": 120000,
+          "lengths": {
+            "focus": 5,
+            "break": 1,
+            "longBreak": 5,
+            "every": 2
+          }
+        },
+        {
+          "op": "skip",
+          "now": 180000
+        },
+        {
+          "op": "lengths",
+          "now": 180000,
+          "lengths": {
+            "focus": 25,
+            "break": 5,
+            "longBreak": 15,
+            "every": 4
+          }
+        }
+      ]
+    ],
+    "expect": [
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 1500000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": false,
+        "left": 1440000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": false,
+        "left": 1440000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": false,
+        "left": 3000000,
+        "active": false
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": false,
+        "left": 300000,
+        "active": false
+      },
+      {
+        "phase": "break",
+        "rounds": 1,
+        "running": false,
+        "left": 60000,
+        "active": true
+      },
+      {
+        "phase": "break",
+        "rounds": 1,
+        "running": false,
+        "left": 300000,
+        "active": true
+      }
+    ]
+  },
+  {
+    "fn": "run",
+    "args": [
+      {
+        "focus": 25,
+        "break": 5,
+        "longBreak": 15,
+        "every": 4
+      },
+      [
+        {
+          "op": "toggle",
+          "now": 0
+        },
+        {
+          "op": "toggle",
+          "now": 1500000
+        },
+        {
+          "op": "toggle",
+          "now": 1560000
+        },
+        {
+          "op": "finish",
+          "now": 1560000
+        }
+      ]
+    ],
+    "expect": [
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 1500000,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": false,
+        "left": 0,
+        "active": true
+      },
+      {
+        "phase": "focus",
+        "rounds": 0,
+        "running": true,
+        "left": 0,
+        "active": true
+      },
+      {
+        "phase": "break",
+        "rounds": 1,
+        "running": true,
+        "left": 300000,
+        "active": true
+      }
+    ]
+  }
+]
