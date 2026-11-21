@@ -1002,6 +1002,10 @@ fn background(app: &App) {
     for sf in &app.surfaces {
         unsafe {
             let _ = ShowWindow(sf.hwnd, SW_HIDE);
+            // A pill's shadow is a window of its own: out of the background too.
+            if let Some(h) = sf.shadow_hwnd {
+                let _ = ShowWindow(h, SW_HIDE);
+            }
         }
     }
     unsafe {
@@ -1012,6 +1016,9 @@ fn background(app: &App) {
     let grabs: Vec<Option<Grab>> = app.surfaces.iter().map(|sf| grab(sf.window)).collect();
     for sf in &app.surfaces {
         unsafe {
+            if let Some(h) = sf.shadow_hwnd {
+                let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
+            }
             let _ = ShowWindow(sf.hwnd, SW_SHOWNOACTIVATE);
         }
     }
