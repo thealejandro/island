@@ -94,7 +94,7 @@ use windows::core::{Error, HSTRING, PCWSTR, Result, w};
 // Sizes in DIPs (1/96 inch); the springs run in DIPs too, so a DPI change
 // doesn't jolt the motion.
 const OPEN: (f32, f32) = (layout::OPEN_WIDTH, pages::OPEN_HEIGHT);
-const RADIUS: f32 = 18.0;
+const RADIUS: f32 = 24.0;
 const EAR: f32 = 10.0;
 const MARGIN: f32 = 8.0;
 
@@ -103,7 +103,7 @@ fn frame_for(placement: Placement, form: shape::Form, s: f32) -> shape::Frame {
     shape::Frame {
         placement,
         form,
-        ear: EAR * s,
+        ear: (EAR * s).round(),
         margin: MARGIN * s,
         gap: shape::PILL_GAP * s,
         shadow: (shape::SHADOW_EXTENT + shape::SHADOW_DROP) * s,
@@ -539,8 +539,12 @@ struct Surface {
     /// The pointer is over this island (WM_MOUSELEAVE is armed).
     tracking: bool,
     /// The window region last set, in px: the island's rect (left, top,
-    /// right, bottom), then its bubble's (all zeros: none).
-    region: [i32; 12],
+    /// right, bottom), then its bubble's (all zeros: none), then the ear's
+    /// rows' count (0: no ears).
+    region: [i32; 13],
+    /// The island didn't move on its last frame: its content may sit on
+    /// whole pixels.
+    still: bool,
     /// The focus timer's bubble beside the closed island, in DIPs: how far
     /// it is out (0 hidden behind the island, the gap plus its width out).
     bubble: Spring,
@@ -614,7 +618,8 @@ impl Surface {
             open: false,
             peek_view: false,
             tracking: false,
-            region: [0; 12],
+            region: [0; 13],
+            still: true,
             bubble: Spring::at(0.0),
             on_bubble: false,
             bubble_hold: None,
@@ -783,16 +788,22 @@ impl Surface {
         (self.open_width, OPEN.1)
     }
 
+    /// The body's size in px: whole pixels along each axis whose spring has
+    /// settled, so a body at rest has crisp edges at any scale.
+    fn body_px(&self) -> (f32, f32) {
+        let axis = |sp: &Spring| {
+            let v = sp.value.max(0.0) * self.scale;
+            if sp.is_settled() { v.round() } else { v }
+        };
+        (axis(&self.width), axis(&self.height))
+    }
+
     /// From window px to the open layout's DIPs: it is centered in the
     /// body; y from the island's top.
     fn to_open(&self, f: shape::Frame, x: f32, y: f32) -> (f32, f32) {
         let s = self.scale;
-        let body = f.body(
-            self.window.width,
-            self.width.value * s,
-            self.height.value * s,
-            self.width.is_settled(),
-        );
+        let (bw, bh) = self.body_px();
+        let body = f.body(self.window.width, bw, bh, self.width.is_settled());
         let lx = (x - body.x - f.ear_room()) / s - (self.width.value - self.open_size().0) / 2.0;
         (lx, (y - body.y) / s)
     }
@@ -1287,12 +1298,18 @@ impl App {
         let s = sf.scale;
         let (bw, bh) = self.bubble_dips();
         let (rw, rh) = (
-            sf.width.value.max(sf.width.target) * s,
-            sf.height.value.max(sf.height.target) * s,
+            (sf.width.value.max(sf.width.target) * s).round(),
+            (sf.height.value.max(sf.height.target) * s).round(),
         );
         let f = self.frame_at(i);
         let rb = f.body(sf.window.width, rw, rh, true);
-        f.bubble(rb, bw * s, bh * s, activity::BUBBLE_GAP * s, 1.0)
+        f.bubble(
+            rb,
+            (bw * s).round(),
+            (bh * s).round(),
+            (activity::BUBBLE_GAP * s).round(),
+            1.0,
+        )
     }
 
     /// The bubble's part of the window region when it is out (ears left
@@ -1305,8 +1322,8 @@ impl App {
         // bubble slides through it and the pointer crosses it.
         let sf = &self.surfaces[i];
         let (rw, rh) = (
-            sf.width.value.max(sf.width.target) * sf.scale,
-            sf.height.value.max(sf.height.target) * sf.scale,
+            (sf.width.value.max(sf.width.target) * sf.scale).round(),
+            (sf.height.value.max(sf.height.target) * sf.scale).round(),
         );
         let rb = f.body(sf.window.width, rw, rh, true);
         let (body_l, body_r) = (rb.x + inset, rb.x + rb.width - inset);
@@ -1403,20 +1420,25 @@ impl App {
 
         let sf = &mut self.surfaces[i];
         let s = sf.scale;
-        let (w, h) = (sf.width.value.max(0.0) * s, sf.height.value.max(0.0) * s);
-        let (ear, radius) = (EAR * s, RADIUS * s);
+        let (w, h) = sf.body_px();
+        let radius = RADIUS * s;
         let body = f.body(sf.window.width, w, h, sf.width.is_settled());
-        let outline = shape::outline(form, shape_style, f.hangs(), w, h, radius, ear, s);
-        // The pointer only reaches the island inside its body, ears left
-        // out; everywhere else, clicks go to what is below. The region takes
-        // the bigger of the size now and the target, so it changes only when
-        // the island starts to open and when it has finished closing.
+        let outline = shape::outline(form, shape_style, f.hangs(), w, h, radius, f.ear, s);
+        // The pointer only reaches the island inside its body; everywhere
+        // else, clicks go to what is below. The region takes the bigger of
+        // the size now and the target, so it changes only when the island
+        // starts to open and when it has finished closing. Moving, the body
+        // is drawn off the whole pixels: the region leaves a pixel of room.
+        // The ears (a hanging body's) go in too, row by row, or the region
+        // would cut them off at the screen's edge.
+        let settled = sf.width.is_settled() && sf.height.is_settled();
         let (rw, rh) = (
-            sf.width.value.max(sf.width.target) * s,
-            sf.height.value.max(sf.height.target) * s,
+            (sf.width.value.max(sf.width.target) * s).round(),
+            (sf.height.value.max(sf.height.target) * s).round(),
         );
         let inset = f.ear_room();
         let rb = f.body(sf.window.width, rw, rh, true);
+        let pad = if settled { 0 } else { 1 };
         // A pill at the top owns the gap above it; a pill elsewhere starts
         // at its body, so the shadow's room around it is click-through.
         let top = if form == shape::Form::Pill && placement != Placement::Top {
@@ -1430,11 +1452,18 @@ impl App {
         // While held, the hold stays whatever the bubble does.
         let extras = [bubble_out.then_some(bubble_rest), sf.bubble_hold];
         let [e0, e1] = extras.map(|e| e.unwrap_or([0; 4]));
-        let region = [
-            (rb.x + inset).floor() as i32,
+        let ear_px = if f.hangs() { f.ear as i32 } else { 0 };
+        let body_rect = [
+            (rb.x + inset).floor() as i32 - pad,
             top,
-            (rb.x + rb.width - inset).ceil() as i32,
-            (rb.y + rh).ceil() as i32,
+            (rb.x + rb.width - inset).ceil() as i32 + pad,
+            (rb.y + rh).ceil() as i32 + pad,
+        ];
+        let region = [
+            body_rect[0],
+            body_rect[1],
+            body_rect[2],
+            body_rect[3],
             e0[0],
             e0[1],
             e0[2],
@@ -1443,27 +1472,49 @@ impl App {
             e1[1],
             e1[2],
             e1[3],
+            ear_px,
         ];
         if region != sf.region {
             sf.region = region;
             unsafe {
-                let rgn = CreateRectRgn(region[0], region[1], region[2], region[3]);
+                let rgn = CreateRectRgn(body_rect[0], body_rect[1], body_rect[2], body_rect[3]);
+                let or = |a: i32, b: i32, c: i32, d: i32| {
+                    let part = CreateRectRgn(a, b, c, d);
+                    let _ = CombineRgn(Some(rgn), Some(rgn), Some(part), RGN_OR);
+                    let _ = DeleteObject(part.into());
+                };
                 for e in extras.into_iter().flatten() {
-                    let extra = CreateRectRgn(e[0], e[1], e[2], e[3]);
-                    let _ = CombineRgn(Some(rgn), Some(rgn), Some(extra), RGN_OR);
-                    let _ = DeleteObject(extra.into());
+                    or(e[0], e[1], e[2], e[3]);
+                }
+                if ear_px > 0 {
+                    let rows = shape::ear_rows(f.ear);
+                    let rects = std::iter::once(body_rect).chain(extras.into_iter().flatten());
+                    for r in rects {
+                        // Consecutive rows of the same reach are one rect.
+                        let mut y = 0;
+                        while y < rows.len() {
+                            let n = rows[y];
+                            let mut end = y + 1;
+                            while end < rows.len() && rows[end] == n {
+                                end += 1;
+                            }
+                            or(r[0] - n, y as i32, r[0], end as i32);
+                            or(r[2], y as i32, r[2] + n, end as i32);
+                            y = end;
+                        }
+                    }
                 }
                 SetWindowRgn(sf.hwnd, Some(rgn), false);
             }
         }
         // How far out the bubble is, 0 to 1, and where it is now.
         let bubble_t = (sf.bubble.value / (activity::BUBBLE_GAP + bubble_w)).clamp(0.0, 1.0);
-        let bubble_px = (bubble_w * s, bubble_h * s);
+        let bubble_px = ((bubble_w * s).round(), (bubble_h * s).round());
         let bubble_rect = f.bubble(
             body,
             bubble_px.0,
             bubble_px.1,
-            activity::BUBBLE_GAP * s,
+            (activity::BUBBLE_GAP * s).round(),
             bubble_t,
         );
         let bubble_outline = shape::outline(
@@ -1473,7 +1524,7 @@ impl App {
             bubble_px.0,
             bubble_px.1,
             radius,
-            ear,
+            f.ear,
             s,
         );
         let lyrics = lyrics_filled.then_some(render::LyricsView {
@@ -1610,6 +1661,7 @@ impl App {
             openness: open_a,
             peek_view: sf.peek_view,
             island_scale: k,
+            still: sf.still,
         };
         let drawn = match &mut sf.renderer {
             Some(r) => r.draw(&scene),
@@ -2644,6 +2696,9 @@ impl App {
         let peeking = self.peeking(i);
         let toast = self.toast_shown_at(i);
         let mut moving;
+        // What moves the content itself (not the bubble, the light or the
+        // lyric glide): only while it is still do rects snap to whole px.
+        let mut geometry;
         {
             let sf = &mut self.surfaces[i];
             let now = Instant::now();
@@ -2679,11 +2734,13 @@ impl App {
             } else {
                 spring::STILL
             };
-            moving = sf.width.advance(&pw, ms) | sf.height.advance(&ph, ms);
-            moving |= sf.bubble.advance(&pb, ms);
+            geometry = sf.width.advance(&pw, ms) | sf.height.advance(&ph, ms);
+            let bubble_moving = sf.bubble.advance(&pb, ms);
+            moving = geometry | bubble_moving;
             if let Some((_, at)) = &sf.swap {
                 if at.elapsed().as_secs_f32() * 1000.0 < SWAP_MS {
                     moving = true;
+                    geometry = true;
                 } else {
                     sf.swap = None;
                 }
@@ -2692,6 +2749,7 @@ impl App {
         if let Some((_, at)) = self.page_from {
             if at.elapsed().as_secs_f32() * 1000.0 < PAGE_MS {
                 moving |= self.surfaces[i].open;
+                geometry |= self.surfaces[i].open;
             } else {
                 self.page_from = None;
             }
@@ -2712,6 +2770,7 @@ impl App {
                 self.lyric_moved = None;
             }
         }
+        self.surfaces[i].still = !geometry;
         self.draw_surface(i);
         #[cfg(feature = "qa")]
         qa::frame(self, i);

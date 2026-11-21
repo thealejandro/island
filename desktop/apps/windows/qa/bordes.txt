@@ -1,0 +1,709 @@
+# QA de los bordes: island.exe --qa qa/bordes.txt --qa-out <carpeta>
+# Las esquinas, las orejas y el aro de la isla a cada escala de pantalla:
+# cerrada, con música, aviso, notificación y abierta, en muesca (suave y
+# clásica), flotante y píldora; con capturas y comprobaciones (las orejas no
+# deben quedar cortadas en el borde de la pantalla).
+slow 3
+
+# Escala 1.
+scale 1
+wait-rest
+
+# notch, smooth, top.
+set islandStyle "notch"
+set shape "smooth"
+set placement "top"
+wait-rest
+background
+grab b-notch-smooth-top-x1-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-notch-smooth-top-x1-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-notch-smooth-top-x1-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-notch-smooth-top-x1-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-notch-smooth-top-x1-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# notch, classic, top.
+set islandStyle "notch"
+set shape "classic"
+set placement "top"
+wait-rest
+background
+grab b-notch-classic-top-x1-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-notch-classic-top-x1-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-notch-classic-top-x1-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-notch-classic-top-x1-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-notch-classic-top-x1-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# notch, smooth, floating.
+set islandStyle "notch"
+set shape "smooth"
+set placement "floating"
+wait-rest
+background
+grab b-notch-smooth-floating-x1-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-notch-smooth-floating-x1-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-notch-smooth-floating-x1-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-notch-smooth-floating-x1-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-notch-smooth-floating-x1-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# pill, smooth, top.
+set islandStyle "pill"
+set shape "smooth"
+set placement "top"
+wait-rest
+background
+grab b-pill-smooth-top-x1-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-pill-smooth-top-x1-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-pill-smooth-top-x1-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-pill-smooth-top-x1-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-pill-smooth-top-x1-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# Escala 1.25.
+scale 1.25
+wait-rest
+
+# notch, smooth, top.
+set islandStyle "notch"
+set shape "smooth"
+set placement "top"
+wait-rest
+background
+grab b-notch-smooth-top-x1.25-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-notch-smooth-top-x1.25-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-notch-smooth-top-x1.25-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-notch-smooth-top-x1.25-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-notch-smooth-top-x1.25-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# notch, classic, top.
+set islandStyle "notch"
+set shape "classic"
+set placement "top"
+wait-rest
+background
+grab b-notch-classic-top-x1.25-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-notch-classic-top-x1.25-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-notch-classic-top-x1.25-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-notch-classic-top-x1.25-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-notch-classic-top-x1.25-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# notch, smooth, floating.
+set islandStyle "notch"
+set shape "smooth"
+set placement "floating"
+wait-rest
+background
+grab b-notch-smooth-floating-x1.25-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-notch-smooth-floating-x1.25-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-notch-smooth-floating-x1.25-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-notch-smooth-floating-x1.25-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-notch-smooth-floating-x1.25-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# pill, smooth, top.
+set islandStyle "pill"
+set shape "smooth"
+set placement "top"
+wait-rest
+background
+grab b-pill-smooth-top-x1.25-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-pill-smooth-top-x1.25-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-pill-smooth-top-x1.25-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-pill-smooth-top-x1.25-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-pill-smooth-top-x1.25-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# Escala 1.5.
+scale 1.5
+wait-rest
+
+# notch, smooth, top.
+set islandStyle "notch"
+set shape "smooth"
+set placement "top"
+wait-rest
+background
+grab b-notch-smooth-top-x1.5-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-notch-smooth-top-x1.5-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-notch-smooth-top-x1.5-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-notch-smooth-top-x1.5-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-notch-smooth-top-x1.5-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# notch, classic, top.
+set islandStyle "notch"
+set shape "classic"
+set placement "top"
+wait-rest
+background
+grab b-notch-classic-top-x1.5-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-notch-classic-top-x1.5-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-notch-classic-top-x1.5-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-notch-classic-top-x1.5-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-notch-classic-top-x1.5-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# notch, smooth, floating.
+set islandStyle "notch"
+set shape "smooth"
+set placement "floating"
+wait-rest
+background
+grab b-notch-smooth-floating-x1.5-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-notch-smooth-floating-x1.5-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-notch-smooth-floating-x1.5-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-notch-smooth-floating-x1.5-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-notch-smooth-floating-x1.5-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# pill, smooth, top.
+set islandStyle "pill"
+set shape "smooth"
+set placement "top"
+wait-rest
+background
+grab b-pill-smooth-top-x1.5-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-pill-smooth-top-x1.5-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-pill-smooth-top-x1.5-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-pill-smooth-top-x1.5-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-pill-smooth-top-x1.5-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# Escala 1.75.
+scale 1.75
+wait-rest
+
+# notch, smooth, top.
+set islandStyle "notch"
+set shape "smooth"
+set placement "top"
+wait-rest
+background
+grab b-notch-smooth-top-x1.75-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-notch-smooth-top-x1.75-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-notch-smooth-top-x1.75-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-notch-smooth-top-x1.75-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-notch-smooth-top-x1.75-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# notch, classic, top.
+set islandStyle "notch"
+set shape "classic"
+set placement "top"
+wait-rest
+background
+grab b-notch-classic-top-x1.75-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-notch-classic-top-x1.75-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-notch-classic-top-x1.75-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-notch-classic-top-x1.75-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-notch-classic-top-x1.75-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# notch, smooth, floating.
+set islandStyle "notch"
+set shape "smooth"
+set placement "floating"
+wait-rest
+background
+grab b-notch-smooth-floating-x1.75-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-notch-smooth-floating-x1.75-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-notch-smooth-floating-x1.75-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-notch-smooth-floating-x1.75-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-notch-smooth-floating-x1.75-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# pill, smooth, top.
+set islandStyle "pill"
+set shape "smooth"
+set placement "top"
+wait-rest
+background
+grab b-pill-smooth-top-x1.75-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-pill-smooth-top-x1.75-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-pill-smooth-top-x1.75-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-pill-smooth-top-x1.75-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-pill-smooth-top-x1.75-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# Escala 2.
+scale 2
+wait-rest
+
+# notch, smooth, top.
+set islandStyle "notch"
+set shape "smooth"
+set placement "top"
+wait-rest
+background
+grab b-notch-smooth-top-x2-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-notch-smooth-top-x2-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-notch-smooth-top-x2-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-notch-smooth-top-x2-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-notch-smooth-top-x2-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# notch, classic, top.
+set islandStyle "notch"
+set shape "classic"
+set placement "top"
+wait-rest
+background
+grab b-notch-classic-top-x2-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-notch-classic-top-x2-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-notch-classic-top-x2-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-notch-classic-top-x2-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-notch-classic-top-x2-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# notch, smooth, floating.
+set islandStyle "notch"
+set shape "smooth"
+set placement "floating"
+wait-rest
+background
+grab b-notch-smooth-floating-x2-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-notch-smooth-floating-x2-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-notch-smooth-floating-x2-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-notch-smooth-floating-x2-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-notch-smooth-floating-x2-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# pill, smooth, top.
+set islandStyle "pill"
+set shape "smooth"
+set placement "top"
+wait-rest
+background
+grab b-pill-smooth-top-x2-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-pill-smooth-top-x2-musica
+notice "Micrófono apagado" "Zoom"
+wait-rest
+background
+grab b-pill-smooth-top-x2-vistazo
+wait 4000
+wait-rest
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+background
+grab b-pill-smooth-top-x2-toast
+wait 6000
+wait-rest
+open
+wait-rest
+background
+grab b-pill-smooth-top-x2-abierta
+close
+wait-rest
+notrack
+wait-rest
+
+# Escala 1.25 con closedHeight 30.
+scale 1.25
+set islandStyle "notch"
+set shape "smooth"
+set placement "top"
+set closedHeight 30
+wait-rest
+background
+grab b-fraccion-alto30-x1.25-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-fraccion-alto30-x1.25-musica
+notrack
+wait-rest
+
+# Escala 1.5 con islandScale 1.3.
+scale 1.5
+set islandStyle "notch"
+set shape "smooth"
+set placement "top"
+set islandScale 1.3
+wait-rest
+background
+grab b-fraccion-isla1.3-x1.5-cerrada
+track "Canción" "Artista"
+wait-rest
+background
+grab b-fraccion-isla1.3-x1.5-musica
+notrack
+wait-rest
+
+# Vuelta a lo de siempre.
+scale 1
+set islandScale 1
+set closedHeight 32
+set islandStyle "notch"
+set shape "smooth"
+set placement "top"
+wait-rest
+idle 1500
+quit
