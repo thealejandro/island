@@ -451,7 +451,7 @@ pub struct MenuRow<'a> {
     pub kind: menu::Kind,
     pub label: std::borrow::Cow<'a, str>,
     /// A choice's value in use, on the right.
-    pub value: &'a str,
+    pub value: std::borrow::Cow<'a, str>,
     pub on: bool,
     pub enabled: bool,
 }
@@ -2795,7 +2795,7 @@ impl Renderer {
                     width: r.x + r.width - s.switch_end - s.text_x,
                     ..label
                 };
-                self.text(row.value, &fonts.value, value, a * INK_2);
+                self.text(&row.value, &fonts.value, value, a * INK_2);
             }
             if let Some(sw) = switch {
                 let radius = sw.height / 2.0;

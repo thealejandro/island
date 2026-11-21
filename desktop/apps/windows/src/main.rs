@@ -3524,12 +3524,27 @@ impl App {
             .map(|p| p + 1)
     }
 
-    /// Whether the look page asks "apply to": the menu is for a screen, and
-    /// there are two or more, or this one has a look of its own to reach.
-    fn has_own_scope(&self, pick: &MenuPick) -> bool {
-        pick.screen.as_ref().is_some_and(|(id, n)| {
-            self.screens.len() >= 2 || self.settings.has_override(id, Some(*n))
-        })
+    /// The screens with an island, as (id, number), left to right: what
+    /// "apply to" goes through.
+    fn look_screens(&self) -> Vec<(String, usize)> {
+        let mut screens: Vec<(String, usize)> = (0..self.surfaces.len())
+            .filter_map(|i| Some((self.surfaces[i].id.clone(), self.screen_number(i)?)))
+            .collect();
+        screens.sort_by_key(|s| s.1);
+        screens.dedup_by_key(|s| s.1);
+        screens
+    }
+
+    /// Whether the look page asks "apply to": there is a screen with an
+    /// island to choose, and two screens or more, or one with a look of its
+    /// own to reach.
+    fn has_own_scope(&self) -> bool {
+        let screens = self.look_screens();
+        !screens.is_empty()
+            && (self.screens.len() >= 2
+                || screens
+                    .iter()
+                    .any(|(id, n)| self.settings.has_override(id, Some(*n))))
     }
 
     /// The look page's entries.
@@ -3539,7 +3554,7 @@ impl App {
         let row = |kind, label: &'static str, value: &'static str, on, enabled| render::MenuRow {
             kind,
             label: label.into(),
-            value,
+            value: value.into(),
             on,
             enabled,
         };
@@ -3549,15 +3564,23 @@ impl App {
             (0, row(line, "", "", false, false)),
         ];
         // With two screens or more (or one that has a look of its own):
-        // for this one, or for all.
-        let per_screen = self.has_own_scope(pick);
+        // for all, or for one of them, by its number.
+        let per_screen = self.has_own_scope();
         if per_screen {
-            let value = if pick.this {
-                t.this_screen
-            } else {
-                t.all_screens
+            let value = match &pick.screen {
+                Some((_, n)) if pick.this => texts::fill(t.display_n, &[*n as u32]).into(),
+                _ => t.all_screens.into(),
             };
-            rows.push((MENU_SCOPE, row(choice, t.apply_to, value, false, true)));
+            rows.push((
+                MENU_SCOPE,
+                render::MenuRow {
+                    kind: choice,
+                    label: t.apply_to.into(),
+                    value,
+                    on: false,
+                    enabled: true,
+                },
+            ));
         }
         let place = match look.placement {
             Placement::Top => t.place_top,
@@ -3626,14 +3649,14 @@ impl App {
         let row = |kind, label: &'static str, on, enabled| render::MenuRow {
             kind,
             label: label.into(),
-            value: "",
+            value: "".into(),
             on,
             enabled,
         };
         let choice = |label: &'static str, value: &'static str, enabled| render::MenuRow {
             kind: MenuKind::Choice,
             label: label.into(),
-            value,
+            value: value.into(),
             on: false,
             enabled,
         };
@@ -3741,7 +3764,7 @@ impl App {
                     render::MenuRow {
                         kind: toggle,
                         label: label.into(),
-                        value: "",
+                        value: "".into(),
                         on: has,
                         enabled: !(has && on.len() == 1),
                     },
@@ -4309,9 +4332,25 @@ impl App {
                 self.set_look(id);
                 return;
             }
+            // All screens, then each island's screen left to right, then
+            // all again.
             MENU_SCOPE => {
+                let screens = self.look_screens();
                 if let Some(m) = &mut self.menu {
-                    m.pick.this = !m.pick.this && m.pick.screen.is_some();
+                    let at = m
+                        .pick
+                        .screen
+                        .as_ref()
+                        .filter(|_| m.pick.this)
+                        .and_then(|(_, n)| screens.iter().position(|s| s.1 == *n));
+                    let next = match at {
+                        Some(j) => screens.get(j + 1),
+                        None => screens.first(),
+                    };
+                    m.pick.this = next.is_some();
+                    if let Some(s) = next {
+                        m.pick.screen = Some(s.clone());
+                    }
                 }
                 return;
             }
