@@ -172,7 +172,8 @@ A bad value falls back to the global one, and an entry for a screen that
 isn't connected is ignored (and kept in the file). The id changes if the
 monitor moves to another port. The tray menu's "Island look" page edits the
 same file: with two screens or more (or one that has an entry of its own),
-"Apply to" chooses "This screen" or every screen, and "Same as all screens"
+"Apply to" goes through all screens and each screen with an island
+(Screen 1, Screen 2… left to right), and "Same as all screens"
 takes the screen's entry out. A screen's `openWidth` can be `"auto"` too,
 even when the global one is a fixed width. The
 command-line flags (`--placement`, `--island-style`, `--open-width`) win over

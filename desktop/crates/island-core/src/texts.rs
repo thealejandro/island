@@ -17,7 +17,6 @@ pub struct Texts {
     pub back: &'static str,
     /// Which screens a change on that page is for, and its values.
     pub apply_to: &'static str,
-    pub this_screen: &'static str,
     /// Back to what all the screens have.
     pub same_as_all: &'static str,
     /// Where the island sits, and its values.
@@ -122,7 +121,6 @@ pub const EN: Texts = Texts {
     island_look: "Island look",
     back: "Back",
     apply_to: "Apply to",
-    this_screen: "This screen",
     same_as_all: "Same as all screens",
     position: "Position",
     place_top: "Top",
@@ -202,7 +200,6 @@ pub const ES: Texts = Texts {
     island_look: "Aspecto de la isla",
     back: "Atrás",
     apply_to: "Aplicar a",
-    this_screen: "Esta pantalla",
     same_as_all: "Igual que todas",
     position: "Posición",
     place_top: "Arriba",
@@ -336,7 +333,6 @@ mod tests {
                 t.island_look,
                 t.back,
                 t.apply_to,
-                t.this_screen,
                 t.same_as_all,
                 t.position,
                 t.place_top,
