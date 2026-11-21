@@ -10,6 +10,9 @@
 //!
 //! - `set <key> <json>`: a setting, as in settings.json (`set placement
 //!   "floating"`, `set islandScale 1.4`, `set islandStyle "pill"`).
+//! - `set-screen <i|id:KEY> <key> <json>`: a key of a screen's own look in
+//!   `screens` (island `i`'s id, or its number without one; `id:KEY` names any
+//!   key), as `set`; `set-screen <i> reset` takes its entry out.
 //! - `scale <n>`: every screen at that scale (DIPs to px).
 //! - `slow <n>`: the springs run `n` times slower.
 //! - `track "<title>" "<artist>"`, `notrack`: a song playing, or none.
@@ -33,6 +36,11 @@
 //! - `background`: the screen behind the islands, for what follows.
 //! - `grab <name>`: each island's window as `<name>-<i>.png`.
 //! - `film <name> [max]`: every frame of what moves next, until still.
+//! - `menu`, `menu-key up|down|enter`, `grab-menu <name>`: the menu, opened as
+//!   when the exe is opened again, and its picture. `menu-screen <j>`: its
+//!   switch for screen `j`. `menu-look look|back|scope|placement|style|size|
+//!   smooth|reset`: the look page's rows (the page, the screen it is for, or
+//!   what each changes), never written to the real file.
 //! - `quit`.
 
 use super::*;
@@ -212,6 +220,60 @@ pub fn settings() -> Settings {
         .unwrap_or_default()
 }
 
+/// A field of a screen's own look in the script's settings, in the entry
+/// that is there already (ignoring case) or a new one. The settings now.
+fn screen_set(key: &str, field: &str, v: Value) -> Option<Settings> {
+    QA.with_borrow_mut(|q| {
+        let q = q.as_mut()?;
+        let screens = q
+            .json
+            .entry("screens")
+            .or_insert_with(|| Value::Object(Default::default()));
+        if !screens.is_object() {
+            *screens = Value::Object(Default::default());
+        }
+        let m = screens.as_object_mut()?;
+        let at = m.keys().find(|k| k.eq_ignore_ascii_case(key)).cloned();
+        let e = m
+            .entry(at.unwrap_or_else(|| key.to_owned()))
+            .or_insert_with(|| Value::Object(Default::default()));
+        e.as_object_mut()?.insert(field.to_owned(), v);
+        Some(json_settings(&q.json))
+    })
+}
+
+/// A screen's entries (by any of `keys`, ignoring case) out of the script's
+/// settings. The settings now.
+fn screen_reset(keys: &[&str]) -> Option<Settings> {
+    QA.with_borrow_mut(|q| {
+        let q = q.as_mut()?;
+        if let Some(Value::Object(m)) = q.json.get_mut("screens") {
+            m.retain(|k, _| !keys.iter().any(|d| k.eq_ignore_ascii_case(d)));
+        }
+        Some(json_settings(&q.json))
+    })
+}
+
+/// What the tray menu changes, kept in the script's settings too (a later
+/// `set` rebuilds them from there): `key` is a screen's, none is all's.
+pub fn menu_set(key: Option<&str>, field: &str, v: Value) {
+    match key {
+        Some(k) => {
+            screen_set(k, field, v);
+        }
+        None => QA.with_borrow_mut(|q| {
+            if let Some(q) = q {
+                q.json.insert(field.to_owned(), v);
+            }
+        }),
+    }
+}
+
+/// The tray menu's "same as all", kept in the script's settings too.
+pub fn menu_reset(keys: &[&str]) {
+    screen_reset(keys);
+}
+
 fn json_settings(json: &serde_json::Map<String, Value>) -> Settings {
     Settings::parse(&Value::Object(json.clone()).to_string()).unwrap_or_default()
 }
@@ -262,7 +324,7 @@ fn busy(what: String) {
 /// Where island `i`'s bubble is now (px, ears included), if it is out.
 fn bubble_now(app: &App, i: usize, body: Rect) -> Option<Rect> {
     let sf = &app.surfaces[i];
-    let (bw, bh) = app.bubble_dips();
+    let (bw, bh) = app.bubble_dips(i);
     let t = (sf.bubble.value / (activity::BUBBLE_GAP + bw)).clamp(0.0, 1.0);
     let s = sf.scale;
     (t > 0.0).then(|| {
@@ -280,12 +342,13 @@ fn bubble_now(app: &App, i: usize, body: Rect) -> Option<Rect> {
 pub fn frame(app: &App, i: usize) {
     busy("frame".into());
     let sf = &app.surfaces[i];
-    let k = app.settings.island_scale;
+    let look = app.look(i);
+    let k = look.scale;
     let peek_h = app.peek_unscaled_at(i).1 * k;
-    let a = alphas(sf, app.sizes, k, peek_h);
-    let o = openness(sf, app.sizes, k, peek_h);
+    let a = alphas(sf, look.sizes, k, peek_h);
+    let o = openness(sf, look.sizes, k, peek_h);
     let s = sf.scale;
-    let placement = app.placement;
+    let placement = look.placement;
     let (bw, bh) = sf.body_px();
     let body = app
         .frame_at(i)
@@ -507,6 +570,41 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
                 app.apply(s);
             }
         }
+        "set-screen" => {
+            let who = text(cmd, 1);
+            let field = text(cmd, 2);
+            // The keys it names: an island's id and number, or the one given.
+            let keys: Vec<String> = if let Some(k) = who.strip_prefix("id:") {
+                vec![k.to_owned()]
+            } else {
+                let i: usize = who
+                    .parse()
+                    .map_err(|_| "«set-screen»: una isla o id:CLAVE".to_string())?;
+                let Some(sf) = app.surfaces.get(i) else {
+                    return Err(format!("«set-screen»: no hay isla {i}"));
+                };
+                let n = app.screen_number(i).map(|n| n.to_string());
+                if sf.id.is_empty() {
+                    n.into_iter().collect()
+                } else {
+                    [Some(sf.id.clone()), n].into_iter().flatten().collect()
+                }
+            };
+            let Some(key) = keys.first().cloned() else {
+                return Err("«set-screen»: la isla no tiene número".into());
+            };
+            let raw = text(cmd, 3);
+            let v = serde_json::from_str(&raw).unwrap_or(Value::String(raw));
+            let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+            let s = if field == "reset" {
+                screen_reset(&keys)
+            } else {
+                screen_set(&key, &field, v)
+            };
+            if let Some(s) = s {
+                app.apply(s);
+            }
+        }
         "scale" => {
             let n = arg_f(cmd, 1)?;
             QA.with_borrow_mut(|q| q.as_mut().map(|q| q.scale = Some(n)));
@@ -642,7 +740,39 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
                 "enter" => VK_RETURN,
                 _ => return Err("«menu-key»: up, down o enter".into()),
             };
-            let _ = app.menu_message(WM_KEYDOWN, WPARAM(vk.0 as usize), LPARAM(0));
+            let _ = app.menu_message(
+                app.menu.as_ref().map_or(HWND::default(), |m| m.hwnd),
+                WM_KEYDOWN,
+                WPARAM(vk.0 as usize),
+                LPARAM(0),
+            );
+        }
+        // A row of the menu's look page, chosen as a click does.
+        "menu-look" => {
+            let what = text(cmd, 1);
+            let id = match what.as_str() {
+                "look" => MENU_LOOK,
+                "back" => MENU_BACK,
+                "scope" => MENU_SCOPE,
+                "placement" => MENU_PLACEMENT,
+                "style" => MENU_STYLE,
+                "size" => MENU_SIZE,
+                "smooth" => MENU_SMOOTH,
+                "reset" => MENU_RESET,
+                _ => {
+                    return Err(
+                        "«menu-look»: look, back, scope, placement, style, size, smooth o reset"
+                            .into(),
+                    );
+                }
+            };
+            let Some(startup) = app.menu.as_ref().map(|m| m.startup) else {
+                return Err("«menu-look»: el menú no está abierto".into());
+            };
+            let Some(i) = app.menu_rows(startup).iter().position(|r| r.0 == id) else {
+                return Err(format!("«menu-look»: no hay fila «{what}» en esta página"));
+            };
+            let _ = app.menu_choose(i);
         }
         "grab-menu" => {
             let name = cmd.get(1).ok_or("«grab-menu» pide un nombre")?.clone();
@@ -771,7 +901,7 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
             for (i, sf) in app.surfaces.iter().enumerate() {
                 let (r, w) = (sf.monitor.rect, sf.monitor.work);
                 note(&format!(
-                    "isla {i}: id «{}», pantalla {}x{} en ({}, {}), trabajo {}x{} en ({}, {}), ventana en ({}, {}), alto {:.0}{}{}",
+                    "isla {i}: id «{}», pantalla {}x{} en ({}, {}), trabajo {}x{} en ({}, {}), ventana en ({}, {}), alto {:.0}{}{}, aspecto {} {} x{}{}",
                     sf.id,
                     r.width,
                     r.height,
@@ -785,7 +915,15 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
                     sf.window.y,
                     sf.height.target,
                     if sf.muted { ", muda" } else { "" },
-                    if sf.full { ", pantalla completa" } else { "" }
+                    if sf.full { ", pantalla completa" } else { "" },
+                    sf.look.placement.name(),
+                    sf.look.form.name(),
+                    sf.look.scale,
+                    if app.settings.has_override(&sf.id, app.screen_number(i)) {
+                        ", propio"
+                    } else {
+                        ""
+                    }
                 ));
             }
         }
@@ -864,6 +1002,10 @@ fn background(app: &App) {
     for sf in &app.surfaces {
         unsafe {
             let _ = ShowWindow(sf.hwnd, SW_HIDE);
+            // A pill's shadow is a window of its own: out of the background too.
+            if let Some(h) = sf.shadow_hwnd {
+                let _ = ShowWindow(h, SW_HIDE);
+            }
         }
     }
     unsafe {
@@ -874,6 +1016,9 @@ fn background(app: &App) {
     let grabs: Vec<Option<Grab>> = app.surfaces.iter().map(|sf| grab(sf.window)).collect();
     for sf in &app.surfaces {
         unsafe {
+            if let Some(h) = sf.shadow_hwnd {
+                let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
+            }
             let _ = ShowWindow(sf.hwnd, SW_SHOWNOACTIVATE);
         }
     }
@@ -902,7 +1047,7 @@ fn shoot(app: &App, i: usize, name: &str) {
     let at_rest = sf.width.is_settled() && sf.height.is_settled();
     // A pill's shadow is its own window of the island's rect: the screen
     // capture takes it in, so it is part of the allowed margin here.
-    let shadow = match app.settings.island_style {
+    let shadow = match app.look(i).form {
         shape::Form::Pill => (shape::SHADOW_EXTENT + shape::SHADOW_DROP) * s,
         shape::Form::Notch => 0.0,
     };

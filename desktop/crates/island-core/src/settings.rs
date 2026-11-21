@@ -210,6 +210,96 @@ pub struct Settings {
     /// While a song is loaded and the focus timer is on, the closed island
     /// shows the timer in a small bubble beside it.
     pub dual_activity: bool,
+    /// What each screen has of its own over the settings above, by the
+    /// screen's device id or its number (see [`Settings::screen`]).
+    pub screens: Vec<(String, ScreenOverride)>,
+}
+
+/// What a screen may set for itself (`screens` in the settings): the keys
+/// that shape the island, each one apart. Anything not set follows the
+/// settings above, so a later change to those shows here too.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ScreenOverride {
+    pub placement: Option<Placement>,
+    pub island_style: Option<Form>,
+    pub shape: Option<Style>,
+    pub island_scale: Option<f32>,
+    pub closed_width: Option<f32>,
+    pub closed_height: Option<f32>,
+    pub glance_width: Option<f32>,
+    pub glance_height: Option<f32>,
+    /// `Some(None)` is "auto": its own, even over a fixed global width.
+    pub open_width: Option<Option<f32>>,
+}
+
+/// An island's look on one screen: the overrides over the settings, all
+/// resolved (`Look` in `menu` is the tray menu's own).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScreenLook {
+    pub placement: Placement,
+    pub form: Form,
+    pub shape: Style,
+    pub scale: f32,
+    pub sizes: media::Sizes,
+    pub open_width: f32,
+}
+
+/// The sizes the tray menu steps through (`islandScale`).
+pub const SCALE_STEPS: [f32; 7] = [0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4];
+
+/// The next of [`SCALE_STEPS`] past `now`; the first after the last.
+pub fn next_scale(now: f32) -> f32 {
+    SCALE_STEPS
+        .iter()
+        .copied()
+        .find(|s| *s > now + 0.001)
+        .unwrap_or(SCALE_STEPS[0])
+}
+
+impl ScreenOverride {
+    /// Reads one screen's entry with the globals' rules (numbers clamped,
+    /// widths in steps of 10); whatever is not usable is not set.
+    pub fn parse(o: &Map<String, Value>) -> Self {
+        let text = |k: &str| o.get(k).and_then(Value::as_str);
+        let num = |k: &str| o.get(k).and_then(Value::as_f64).map(|v| v as f32);
+        Self {
+            placement: text("placement").and_then(Placement::parse),
+            island_style: text("islandStyle").and_then(Form::parse),
+            shape: text("shape").and_then(Style::parse),
+            island_scale: num("islandScale").map(|v| v.clamp(ISLAND_SCALE.0, ISLAND_SCALE.1)),
+            closed_width: num("closedWidth").map(|v| media::size_width(v, media::CLOSED_WIDTH)),
+            closed_height: num("closedHeight")
+                .map(|v| v.clamp(media::CLOSED_HEIGHT.0, media::CLOSED_HEIGHT.1)),
+            glance_width: num("glanceWidth").map(|v| media::size_width(v, media::GLANCE_WIDTH)),
+            glance_height: num("glanceHeight")
+                .map(|v| v.clamp(media::GLANCE_HEIGHT.0, media::GLANCE_HEIGHT.1)),
+            open_width: match o.get("openWidth") {
+                Some(Value::String(s)) if s.trim().eq_ignore_ascii_case("auto") => Some(None),
+                Some(Value::Number(n)) => media::parse_open_width(&n.to_string()).map(Some),
+                _ => None,
+            },
+        }
+    }
+
+    /// Nothing set: the screen is as the settings say.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Each field of `self`, else `base`'s.
+    fn over(self, base: Self) -> Self {
+        Self {
+            placement: self.placement.or(base.placement),
+            island_style: self.island_style.or(base.island_style),
+            shape: self.shape.or(base.shape),
+            island_scale: self.island_scale.or(base.island_scale),
+            closed_width: self.closed_width.or(base.closed_width),
+            closed_height: self.closed_height.or(base.closed_height),
+            glance_width: self.glance_width.or(base.glance_width),
+            glance_height: self.glance_height.or(base.glance_height),
+            open_width: self.open_width.or(base.open_width),
+        }
+    }
 }
 
 /// `lyricsDelay`'s range, in ms.
@@ -262,6 +352,7 @@ impl Default for Settings {
             animations: Animations::System,
             hide_in_full_screen: true,
             dual_activity: true,
+            screens: Vec::new(),
         }
     }
 }
@@ -308,7 +399,8 @@ pub const TEMPLATE: &str = r#"{
   "notificationsInFullScreen": "here",
   "notificationSound": true,
   "updateCheck": true,
-  "lyricsDelay": "auto"
+  "lyricsDelay": "auto",
+  "screens": {}
 }
 "#;
 
@@ -458,7 +550,33 @@ impl Settings {
                 .unwrap_or(d.animations),
             hide_in_full_screen: flag("hideInFullScreen", d.hide_in_full_screen),
             dual_activity: flag("dualActivity", d.dual_activity),
+            screens: Self::parse_screens(o.get("screens")),
         })
+    }
+
+    /// The `screens` object: a screen per key, kept in the file's order.
+    /// Entries that are not objects or set nothing usable, repeated keys
+    /// (ignoring case) are left out.
+    fn parse_screens(v: Option<&Value>) -> Vec<(String, ScreenOverride)> {
+        let Some(Value::Object(m)) = v else {
+            return Vec::new();
+        };
+        let mut out: Vec<(String, ScreenOverride)> = Vec::new();
+        for (key, entry) in m {
+            let key = key.trim();
+            let Value::Object(entry) = entry else {
+                continue;
+            };
+            let o = ScreenOverride::parse(entry);
+            if key.is_empty()
+                || o.is_empty()
+                || out.iter().any(|(k, _)| k.eq_ignore_ascii_case(key))
+            {
+                continue;
+            }
+            out.push((key.to_owned(), o));
+        }
+        out
     }
 
     /// The lyrics' delay in ms: the one chosen, or by whether the sound goes
@@ -482,12 +600,91 @@ impl Settings {
     /// The open island's width setting: the chosen one, or 560 (with a
     /// column of lyrics or without, so turning them on doesn't resize it).
     pub fn open_width(&self) -> f32 {
-        self.open_width
-            .unwrap_or(if self.lyrics && self.open_lyrics {
-                media::OPEN_LYRICS_WIDTH
-            } else {
-                media::OPEN_WIDTH
+        self.open_width.unwrap_or_else(|| self.auto_open_width())
+    }
+
+    /// The open island's width when it is "auto".
+    fn auto_open_width(&self) -> f32 {
+        if self.lyrics && self.open_lyrics {
+            media::OPEN_LYRICS_WIDTH
+        } else {
+            media::OPEN_WIDTH
+        }
+    }
+
+    /// What screen `id` (its device id, empty if Windows gives none) has of
+    /// its own, `number` being its place left to right, from 1: the entry
+    /// by id, field by field over the one by number.
+    pub fn screen(&self, id: &str, number: Option<usize>) -> ScreenOverride {
+        let by_id = (!id.is_empty())
+            .then(|| {
+                self.screens
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(id))
             })
+            .flatten()
+            .map(|(_, o)| *o)
+            .unwrap_or_default();
+        let by_number = number
+            .and_then(|n| {
+                self.screens
+                    .iter()
+                    .find(|(k, _)| Pick::parse(k) == Some(Pick::Number(n)))
+            })
+            .map(|(_, o)| *o)
+            .unwrap_or_default();
+        by_id.over(by_number)
+    }
+
+    /// Whether the screen has anything of its own.
+    pub fn has_override(&self, id: &str, number: Option<usize>) -> bool {
+        !self.screen(id, number).is_empty()
+    }
+
+    /// The island's look on a screen: its own, else the settings'.
+    pub fn for_screen(&self, id: &str, number: Option<usize>) -> ScreenLook {
+        let o = self.screen(id, number);
+        ScreenLook {
+            placement: o.placement.unwrap_or(self.placement),
+            form: o.island_style.unwrap_or(self.island_style),
+            shape: o.shape.unwrap_or(self.shape),
+            scale: o.island_scale.unwrap_or(self.island_scale),
+            sizes: media::Sizes::new(
+                o.closed_width.unwrap_or(self.closed_width),
+                o.closed_height.unwrap_or(self.closed_height),
+                o.glance_width.unwrap_or(self.glance_width),
+                o.glance_height.unwrap_or(self.glance_height),
+            ),
+            open_width: match o.open_width {
+                Some(w) => w.unwrap_or_else(|| self.auto_open_width()),
+                None => self.open_width(),
+            },
+        }
+    }
+
+    /// The look no screen's own changes: the settings'.
+    pub fn look(&self) -> ScreenLook {
+        self.for_screen("", None)
+    }
+
+    /// The entry for `key` (a device id or a number), added if missing.
+    pub fn screen_entry(&mut self, key: &str) -> &mut ScreenOverride {
+        let i = self
+            .screens
+            .iter()
+            .position(|(k, _)| k.eq_ignore_ascii_case(key))
+            .unwrap_or_else(|| {
+                self.screens
+                    .push((key.to_owned(), ScreenOverride::default()));
+                self.screens.len() - 1
+            });
+        &mut self.screens[i].1
+    }
+
+    /// Drops the entries under these keys: those screens follow the settings.
+    pub fn reset_screen(&mut self, keys: &[&str]) {
+        self.screens
+            .retain(|(k, _)| !keys.iter().any(|d| k.eq_ignore_ascii_case(d)));
     }
 }
 
@@ -518,6 +715,58 @@ pub fn set(text: &str, key: &str, value: Value) -> String {
     let mut out = serde_json::to_string_pretty(&Value::Object(o)).unwrap_or_default();
     out.push('\n');
     out
+}
+
+/// `text`'s object, or a new one when it isn't a JSON object.
+fn object_of(text: &str) -> Map<String, Value> {
+    match serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) {
+        Ok(Value::Object(o)) if text.len() <= MAX_FILE => o,
+        _ => Map::new(),
+    }
+}
+
+fn pretty(o: Map<String, Value>) -> String {
+    let mut out = serde_json::to_string_pretty(&Value::Object(o)).unwrap_or_default();
+    out.push('\n');
+    out
+}
+
+/// `text` with `field` set to `value` in the `screens` entry for `key`
+/// (found ignoring case, else added), everything else kept as it was.
+/// Text that isn't a JSON object starts over as one.
+pub fn set_screen(text: &str, key: &str, field: &str, value: Value) -> String {
+    let mut o = object_of(text);
+    if !matches!(o.get("screens"), Some(Value::Object(_))) {
+        o.insert("screens".to_owned(), Value::Object(Map::new()));
+    }
+    if let Some(Value::Object(screens)) = o.get_mut("screens") {
+        let name = screens
+            .keys()
+            .find(|k| k.trim().eq_ignore_ascii_case(key))
+            .cloned()
+            .unwrap_or_else(|| key.to_owned());
+        let entry = screens
+            .entry(name)
+            .or_insert_with(|| Value::Object(Map::new()));
+        if !entry.is_object() {
+            *entry = Value::Object(Map::new());
+        }
+        if let Value::Object(e) = entry {
+            e.insert(field.to_owned(), value);
+        }
+    }
+    pretty(o)
+}
+
+/// `text` without the `screens` entries under these keys (found ignoring
+/// case); `screens` stays, empty if need be. Text that isn't a JSON object
+/// starts over as one.
+pub fn reset_screen(text: &str, keys: &[&str]) -> String {
+    let mut o = object_of(text);
+    if let Some(Value::Object(screens)) = o.get_mut("screens") {
+        screens.retain(|k, _| !keys.iter().any(|d| k.trim().eq_ignore_ascii_case(d)));
+    }
+    pretty(o)
 }
 
 #[cfg(test)]
@@ -908,5 +1157,261 @@ mod tests {
         assert_eq!(Language::System.resolve(""), Language::En);
         assert_eq!(Language::En.resolve("es-MX"), Language::En);
         assert_eq!(Language::parse(""), Some(Language::System));
+    }
+
+    const ID: &str = r"\\?\DISPLAY#GSM5B09#5&2a6b5e3&0&UID4352#{e6f07b5f}";
+
+    #[test]
+    fn no_screens_is_the_global_look() {
+        let s = parse(TEMPLATE);
+        assert!(s.screens.is_empty());
+        assert_eq!(s, Settings::default());
+        let l = s.for_screen(ID, Some(1));
+        assert_eq!(l, s.look());
+        assert_eq!(l.placement, s.placement);
+        assert_eq!(l.form, s.island_style);
+        assert_eq!(l.shape, s.shape);
+        assert_eq!(l.scale, s.island_scale);
+        assert_eq!(l.sizes, s.sizes());
+        assert_eq!(l.open_width, s.open_width());
+        assert!(!s.has_override(ID, Some(1)));
+    }
+
+    #[test]
+    fn a_screen_overrides_only_what_it_names() {
+        let text = serde_json::to_string(&json!({
+            "placement": "top",
+            "islandScale": 1.0,
+            "screens": { ID: { "placement": "floating", "islandStyle": "pill", "islandScale": 1.2 } }
+        }))
+        .unwrap();
+        let s = parse(&text);
+        let l = s.for_screen(ID, Some(1));
+        assert_eq!(l.placement, Placement::Floating);
+        assert_eq!(l.form, Form::Pill);
+        assert_eq!(l.scale, 1.2);
+        assert_eq!(l.sizes, s.sizes());
+        assert_eq!(l.shape, Style::Smooth);
+        assert!(s.has_override(ID, Some(1)));
+        // Another screen keeps the global look.
+        let other = s.for_screen("other", Some(2));
+        assert_eq!(other, s.look());
+        // What it does not name follows a later global change.
+        let text = text.replacen(r#""placement":"top""#, r#""shape":"classic""#, 1);
+        let l = parse(&text).for_screen(ID, Some(1));
+        assert_eq!(l.shape, Style::Classic);
+        assert_eq!(l.placement, Placement::Floating);
+    }
+
+    #[test]
+    fn ids_match_ignoring_case_and_unknown_ones_are_ignored() {
+        let s = parse(r#"{"screens": {"\\\\?\\Display#ABC": {"placement": "floating"}}}"#);
+        assert_eq!(s.screens.len(), 1);
+        let l = s.for_screen(r"\\?\DISPLAY#abc", Some(1));
+        assert_eq!(l.placement, Placement::Floating);
+        assert_eq!(s.for_screen(r"\\?\DISPLAY#xyz", Some(1)), s.look());
+        // No id: only a number can name it.
+        assert_eq!(s.for_screen("", None), s.look());
+        // Repeated keys (ignoring case): the first one.
+        let s = parse(
+            r#"{"screens": {"A": {"placement": "floating"}, "a": {"placement": "top-left"}}}"#,
+        );
+        assert_eq!(s.screens.len(), 1);
+        assert_eq!(s.for_screen("a", None).placement, Placement::Floating);
+    }
+
+    #[test]
+    fn a_number_names_a_screen_by_position_and_the_id_wins() {
+        let text = serde_json::to_string(&json!({
+            "screens": {
+                "2": { "placement": "top-left", "closedHeight": 28 },
+                ID: { "placement": "floating" }
+            }
+        }))
+        .unwrap();
+        let s = parse(&text);
+        // By number alone.
+        let l = s.for_screen("", Some(2));
+        assert_eq!(l.placement, Placement::TopLeft);
+        assert_eq!(l.sizes.closed.1, 28.0);
+        assert_eq!(s.for_screen("", Some(1)), s.look());
+        // Field by field: the id's placement, the number's height.
+        let l = s.for_screen(ID, Some(2));
+        assert_eq!(l.placement, Placement::Floating);
+        assert_eq!(l.sizes.closed.1, 28.0);
+        // The id's entry on another position does not get the number's.
+        let l = s.for_screen(ID, Some(1));
+        assert_eq!(l.placement, Placement::Floating);
+        assert_eq!(l.sizes.closed.1, 32.0);
+        // Numbers below 1 name nothing.
+        let s = parse(r#"{"screens": {"0": {"placement": "floating"}}}"#);
+        assert_eq!(s.for_screen("", Some(1)), s.look());
+    }
+
+    #[test]
+    fn bad_values_fall_back_to_the_global() {
+        let s = parse(
+            r#"{"screens": {"1": {"placement": "nope", "islandScale": "big",
+                "closedHeight": true, "islandStyle": 3, "openWidth": "wide"},
+                "2": 5, "3": [], "4": {}}}"#,
+        );
+        assert!(s.screens.is_empty());
+        let s = parse(
+            r#"{"screens": {"1": {"placement": "nope", "islandScale": "big",
+                "closedHeight": true, "shape": "classic"}, "2": 5}}"#,
+        );
+        assert_eq!(s.screens.len(), 1);
+        let l = s.for_screen("", Some(1));
+        assert_eq!(l.placement, Placement::Top);
+        assert_eq!(l.scale, 1.0);
+        assert_eq!(l.sizes, s.sizes());
+        assert_eq!(l.shape, Style::Classic);
+        for bad in [r#""screens": 5"#, r#""screens": []"#, r#""screens": "x""#] {
+            assert!(parse(&format!("{{{bad}}}")).screens.is_empty());
+        }
+        // An empty key names nothing.
+        assert!(
+            parse(r#"{"screens": {" ": {"placement": "floating"}}}"#)
+                .screens
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn numbers_are_clamped_like_the_globals() {
+        let s = parse(
+            r#"{"screens": {"1": {"islandScale": 9, "closedWidth": 123, "closedHeight": 90,
+                "glanceWidth": 10, "glanceHeight": 1, "openWidth": 544}}}"#,
+        );
+        let l = s.for_screen("", Some(1));
+        assert_eq!(l.scale, ISLAND_SCALE.1);
+        assert_eq!(l.sizes.closed, (120.0, media::CLOSED_HEIGHT.1));
+        assert_eq!(l.sizes.glance.0, media::GLANCE_WIDTH.0);
+        assert_eq!(l.open_width, 540.0);
+        let s = parse(r#"{"screens": {"1": {"islandScale": 0.1, "openWidth": 5000}}}"#);
+        let l = s.for_screen("", Some(1));
+        assert_eq!(l.scale, ISLAND_SCALE.0);
+        assert_eq!(l.open_width, media::OPEN_WIDTH_MAX);
+    }
+
+    #[test]
+    fn the_glance_stays_taller_per_screen() {
+        let s = parse(r#"{"glanceHeight": 44, "screens": {"1": {"closedHeight": 48}}}"#);
+        let l = s.for_screen("", Some(1));
+        assert_eq!(l.sizes.closed.1, 48.0);
+        assert!(l.sizes.glance.1 >= 52.0);
+        assert_eq!(s.look().sizes.glance.1, 44.0);
+    }
+
+    #[test]
+    fn open_width_follows_the_global_auto() {
+        let s = parse(r#"{"lyrics": true, "screens": {"1": {"placement": "floating"}}}"#);
+        assert_eq!(
+            s.for_screen("", Some(1)).open_width,
+            media::OPEN_LYRICS_WIDTH
+        );
+        let s = parse(r#"{"openWidth": 700, "screens": {"1": {"openWidth": 600}}}"#);
+        assert_eq!(s.for_screen("", Some(1)).open_width, 600.0);
+        assert_eq!(s.for_screen("", Some(2)).open_width, 700.0);
+    }
+
+    #[test]
+    fn a_screen_can_be_auto_over_a_fixed_width() {
+        let s = parse(r#"{"openWidth": 700, "screens": {"1": {"openWidth": "auto"}}}"#);
+        assert_eq!(s.screens.len(), 1);
+        assert_eq!(s.for_screen("", Some(1)).open_width, media::OPEN_WIDTH);
+        assert_eq!(s.for_screen("", Some(2)).open_width, 700.0);
+        let s =
+            parse(r#"{"openWidth": 700, "lyrics": true, "screens": {"1": {"openWidth": "Auto"}}}"#);
+        assert_eq!(
+            s.for_screen("", Some(1)).open_width,
+            media::OPEN_LYRICS_WIDTH
+        );
+    }
+
+    #[test]
+    fn every_screen_in_the_file_is_read() {
+        let mut m = Map::new();
+        for n in 1..=40 {
+            m.insert(n.to_string(), json!({ "placement": "floating" }));
+        }
+        let text = serde_json::to_string(&json!({ "screens": m })).unwrap();
+        assert_eq!(parse(&text).screens.len(), 40);
+    }
+
+    #[test]
+    fn set_screen_keeps_the_rest() {
+        let text = set_screen(TEMPLATE, ID, "placement", json!("floating"));
+        let s = parse(&text);
+        assert_eq!(s.for_screen(ID, None).placement, Placement::Floating);
+        // The other keys are where they were.
+        let keys: Vec<String> = serde_json::from_str::<Map<String, Value>>(&text)
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(keys.first().map(String::as_str), Some("language"));
+        assert_eq!(keys.last().map(String::as_str), Some("screens"));
+        // The key is found ignoring case; its other fields are kept.
+        let text = set_screen(&text, &ID.to_lowercase(), "islandScale", json!(1.2));
+        let s = parse(&text);
+        assert_eq!(s.screens.len(), 1);
+        assert_eq!(s.screens[0].0, ID);
+        let l = s.for_screen(ID, None);
+        assert_eq!((l.placement, l.scale), (Placement::Floating, 1.2));
+        // Another screen is added beside it.
+        let text = set_screen(&text, "2", "islandStyle", json!("pill"));
+        let s = parse(&text);
+        assert_eq!(s.screens.len(), 2);
+        assert_eq!(s.for_screen("", Some(2)).form, Form::Pill);
+        // Text of someone's own is kept; broken text starts over.
+        let text = set_screen(
+            r#"{"mine": [1], "screens": 5}"#,
+            "1",
+            "shape",
+            json!("classic"),
+        );
+        let v: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["mine"], json!([1]));
+        assert_eq!(parse(&text).for_screen("", Some(1)).shape, Style::Classic);
+        let text = set_screen("nope", "1", "shape", json!("classic"));
+        assert_eq!(parse(&text).screens.len(), 1);
+    }
+
+    #[test]
+    fn reset_screen_removes_the_entry() {
+        let text = set_screen(TEMPLATE, ID, "placement", json!("floating"));
+        let text = set_screen(&text, "2", "placement", json!("top-left"));
+        let text = reset_screen(&text, &[&ID.to_uppercase(), "7"]);
+        let s = parse(&text);
+        assert_eq!(s.screens.len(), 1);
+        assert_eq!(s.screens[0].0, "2");
+        let text = reset_screen(&text, &["2"]);
+        let v: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["screens"], json!({}));
+        assert_eq!(v["language"], json!(""));
+        assert_eq!(parse(&text), Settings::default());
+    }
+
+    #[test]
+    fn the_settings_in_memory_edit_like_the_text() {
+        let mut s = Settings::default();
+        s.screen_entry(ID).placement = Some(Placement::Floating);
+        s.screen_entry(&ID.to_lowercase()).island_scale = Some(1.1);
+        assert_eq!(s.screens.len(), 1);
+        assert!(s.has_override(ID, Some(1)));
+        s.reset_screen(&[ID, "1"]);
+        assert!(s.screens.is_empty());
+    }
+
+    #[test]
+    fn next_scale_steps_and_wraps() {
+        assert_eq!(next_scale(1.0), 1.1);
+        assert_eq!(next_scale(0.8), 0.9);
+        assert_eq!(next_scale(1.4), 0.8);
+        assert_eq!(next_scale(1.25), 1.3);
+        assert_eq!(next_scale(9.0), 0.8);
+        // A step does not stay put on float noise.
+        assert_eq!(next_scale(1.1 + 0.0001), 1.2);
     }
 }

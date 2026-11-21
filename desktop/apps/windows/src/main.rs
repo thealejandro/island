@@ -45,7 +45,7 @@ use island_core::menu::{self, Kind as MenuKind};
 use island_core::monitor::{self, Monitor, MonitorChoice};
 use island_core::pages::{self, FocusButton, Page};
 use island_core::privacy::{Change, Device};
-use island_core::settings::Settings;
+use island_core::settings::{self, ScreenLook, Settings};
 use island_core::shape::{self, Placement, Rect};
 use island_core::spring::{self, Spring};
 use island_core::texts::{self, Texts};
@@ -473,9 +473,52 @@ const MENU_NOT_NOW: u32 = 10;
 const MENU_SMOOTH: u32 = 11;
 const MENU_GLANCE_SCREEN: u32 = 12;
 const MENU_FULL_SCREEN: u32 = 13;
+// The island look's page: its way in and out, and what it changes.
+const MENU_LOOK: u32 = 14;
+const MENU_BACK: u32 = 15;
+const MENU_SCOPE: u32 = 16;
+const MENU_PLACEMENT: u32 = 17;
+const MENU_STYLE: u32 = 18;
+const MENU_SIZE: u32 = 19;
+const MENU_RESET: u32 = 20;
 /// The screens' switches: this plus the screen's index in `App::screens`.
 const MENU_SCREEN: u32 = 100;
 const MENU_CLASS: PCWSTR = w!("IslandMenu");
+
+/// The menu's pages: the usual one, and the island's look.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MenuPage {
+    Main,
+    Look,
+}
+
+/// Where the menu is: its page, the screen it was opened on (its device id,
+/// and its number from 1, left to right) and whether the look's changes are
+/// for that screen alone.
+#[derive(Clone)]
+struct MenuPick {
+    page: MenuPage,
+    screen: Option<(String, usize)>,
+    this: bool,
+}
+
+impl MenuPick {
+    /// The screen's key in `screens`: its id, or its number without one.
+    fn key(&self) -> Option<String> {
+        let (id, n) = self.screen.as_ref().filter(|_| self.this)?;
+        Some(if id.is_empty() {
+            n.to_string()
+        } else {
+            id.clone()
+        })
+    }
+}
+
+/// The value after `now` in `all`; the first after the last.
+fn next_of<T: Copy + PartialEq>(all: &[T], now: T) -> T {
+    let at = all.iter().position(|&v| v == now);
+    all[at.map_or(0, |i| (i + 1) % all.len())]
+}
 
 /// The menu window, while it is open.
 struct MenuWindow {
@@ -497,6 +540,12 @@ struct MenuWindow {
     look: menu::Look,
     /// A switch just flipped: its row, whether it is on now, and when.
     flip: Option<(usize, bool, Instant)>,
+    /// The page and screen it shows.
+    pick: MenuPick,
+    /// Where it was opened (the pointer, in px), and whether centered
+    /// instead: a new page is placed the same way.
+    at: (i32, i32),
+    centered: bool,
 }
 
 /// Windows' "Animation effects" (Settings, Accessibility), for the
@@ -528,6 +577,12 @@ struct Surface {
     id: String,
     monitor: Monitor,
     scale: f32,
+    /// This screen's look: its own settings over the global ones (see
+    /// [`Settings::for_screen`]), set by each layout.
+    look: ScreenLook,
+    /// The closed island with music, as wide as the song's name needs
+    /// ([`layout::Sizes::closed_width`]) at this screen's sizes.
+    closed_w: f32,
     /// The window on screen, in px: sized for the open island.
     window: Rect,
     width: Spring,
@@ -587,7 +642,13 @@ impl Drop for Surface {
 
 impl Surface {
     /// A window on `monitor`, its renderer and its frame pacer.
-    fn new(mon: HMONITOR, id: String, monitor: Monitor, scale: f32) -> Option<Self> {
+    fn new(
+        mon: HMONITOR,
+        id: String,
+        monitor: Monitor,
+        scale: f32,
+        look: ScreenLook,
+    ) -> Option<Self> {
         let hwnd = unsafe {
             CreateWindowExW(
                 WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP,
@@ -612,6 +673,8 @@ impl Surface {
             id,
             monitor,
             scale,
+            look,
+            closed_w: layout::CLOSED_MEDIA_WIDTH,
             window: Rect::default(),
             width: Spring::at(layout::CLOSED.0),
             height: Spring::at(layout::CLOSED.1),
@@ -915,7 +978,6 @@ struct App {
     surfaces: Vec<Surface>,
     /// The connected screens and their ids, as the last layout found them.
     screens: Vec<(Monitor, String)>,
-    placement: Placement,
     monitor: MonitorChoice,
     media: media::Media,
     track: Option<media::Track>,
@@ -959,9 +1021,6 @@ struct App {
     /// The open island shows the lyrics in a column beside the player (on
     /// by default); off, it is just the player.
     lyrics_column: bool,
-    /// The open island's width setting (DIPs, steps of 10): 560 by default,
-    /// with the column or without.
-    open_width_setting: f32,
     /// The `tema` theme's colors, while a setting follows them.
     theme: Option<island_core::theme::ThemeColors>,
     /// Its `actual.json` is watched (from the first setting that follows it).
@@ -980,11 +1039,9 @@ struct App {
     /// The song's glance text width as measured (each island caps it to its
     /// screen, see `Surface::peek_most`).
     peek_w: f32,
-    /// The closed island with music, as wide as the song's name needs
-    /// ([`layout::closed_width`]); the same on every screen.
-    closed_w: f32,
-    /// The closed island's and the glance's sizes, from the settings.
-    sizes: layout::Sizes,
+    /// The song's name as measured in the closed island's text, in DIPs:
+    /// each island's width with music follows from it (`Surface::closed_w`).
+    name_w: f32,
     /// The open island's page: the one last chosen (while the app runs).
     page: Page,
     /// The page just left, and when: the two cross as the tabs change.
@@ -1170,12 +1227,29 @@ impl App {
                 String::new(),
             ));
         }
+        // Their numbers, as the `screens` setting counts them: left to right.
+        let order = monitor::order(&mons);
+        let number_of = |id: &str, m: &Monitor| {
+            let at = if id.is_empty() {
+                mons.iter().position(|x| x == m)
+            } else {
+                ids.iter().position(|x| x.eq_ignore_ascii_case(id))
+            };
+            at.and_then(|at| order.iter().position(|&o| o == at))
+                .map(|p| p + 1)
+        };
         let mut old = std::mem::take(&mut self.surfaces);
         // A window destroyed behind the app's back is made anew.
         old.retain(|s| unsafe { IsWindow(Some(s.hwnd)) }.as_bool());
         let mut surfaces = Vec::with_capacity(want.len());
         for (mon, m, id) in want {
             let scale = monitor_scale(mon);
+            // The made-up screen has no id nor place: the global look.
+            let look = if mons.contains(&m) {
+                self.settings.for_screen(&id, number_of(&id, &m))
+            } else {
+                self.settings.look()
+            };
             // Its island is the one on the screen with its id; without an
             // id, the one on the same HMONITOR.
             let same = |s: &Surface| {
@@ -1191,12 +1265,13 @@ impl App {
                     sf.mon = mon;
                     sf.monitor = m;
                     sf.scale = scale;
+                    sf.look = look;
                     if !self.settings.dual_activity {
                         sf.bubble = Spring::at(0.0);
                     }
                     Some(sf)
                 }
-                None => Surface::new(mon, id.clone(), m, scale),
+                None => Surface::new(mon, id.clone(), m, scale, look),
             };
             if let Some(sf) = sf {
                 surfaces.push(sf);
@@ -1236,18 +1311,14 @@ impl App {
             }
         }
         for i in 0..self.surfaces.len() {
-            let (f, setting, k) = (
-                self.frame_at(i),
-                self.open_width_setting,
-                self.settings.island_scale,
-            );
+            let (f, l) = (self.frame_at(i), self.look(i));
             // The room beside the island for the focus timer's bubble.
             let room = if self.settings.dual_activity {
-                activity::bubble_room(k, EAR)
+                activity::bubble_room(l.scale, EAR)
             } else {
                 0.0
             };
-            self.surfaces[i].place(f, setting, k, self.sizes, room);
+            self.surfaces[i].place(f, l.open_width, l.scale, l.sizes, room);
         }
         self.fit_text();
         self.retarget_all();
@@ -1258,13 +1329,15 @@ impl App {
         }
     }
 
+    /// Island `i`'s look: its screen's own settings over the global ones.
+    fn look(&self, i: usize) -> ScreenLook {
+        self.surfaces[i].look
+    }
+
     /// Where island `i` sits, at its screen's scale.
     fn frame_at(&self, i: usize) -> shape::Frame {
-        frame_for(
-            self.placement,
-            self.settings.island_style,
-            self.surfaces[i].scale,
-        )
+        let l = self.look(i);
+        frame_for(l.placement, l.form, self.surfaces[i].scale)
     }
 
     /// The focus timer goes in a bubble beside island `i` while the song
@@ -1282,12 +1355,15 @@ impl App {
             && !self.toast_shown_at(i)
     }
 
-    /// The bubble's size in DIPs at `islandScale`: wider with hours, chosen
-    /// by the phase's length so it never changes on a tick.
-    fn bubble_dips(&self) -> (f32, f32) {
-        let k = self.settings.island_scale;
+    /// Island `i`'s bubble's size in DIPs at its `islandScale`: wider with
+    /// hours, chosen by the phase's length so it never changes on a tick.
+    fn bubble_dips(&self, i: usize) -> (f32, f32) {
+        let l = self.look(i);
         let long = self.settings.focus.minutes(self.timer.phase) >= 60;
-        (activity::bubble_width(long) * k, self.sizes.closed.1 * k)
+        (
+            activity::bubble_width(long) * l.scale,
+            l.sizes.closed.1 * l.scale,
+        )
     }
 
     /// Where island `i`'s bubble rests when it is out, in px (ears
@@ -1296,7 +1372,7 @@ impl App {
     fn bubble_rest(&self, i: usize) -> Rect {
         let sf = &self.surfaces[i];
         let s = sf.scale;
-        let (bw, bh) = self.bubble_dips();
+        let (bw, bh) = self.bubble_dips(i);
         let (rw, rh) = (
             (sf.width.value.max(sf.width.target) * s).round(),
             (sf.height.value.max(sf.height.target) * s).round(),
@@ -1332,9 +1408,8 @@ impl App {
         } else {
             (body_r, r.x + r.width - inset)
         };
-        let top = if self.settings.island_style == shape::Form::Pill
-            && self.placement != Placement::Top
-        {
+        let l = self.look(i);
+        let top = if l.form == shape::Form::Pill && l.placement != Placement::Top {
             r.y.floor() as i32
         } else {
             0
@@ -1392,16 +1467,14 @@ impl App {
 
     /// Draws one island's window from the shared state and its own.
     fn draw_surface(&mut self, i: usize) {
-        let k = self.settings.island_scale;
-        let placement = self.placement;
-        let form = self.settings.island_style;
+        let lk = self.look(i);
+        let (k, placement, form, shape_style) = (lk.scale, lk.placement, lk.form, lk.shape);
         let f = self.frame_at(i);
-        let shape_style = self.settings.shape;
         let now = self.now_ms();
         let peek_u = self.peek_unscaled_at(i);
         let peek_h = peek_u.1 * k;
-        let alpha = alphas(&self.surfaces[i], self.sizes, k, peek_h);
-        let open_a = openness(&self.surfaces[i], self.sizes, k, peek_h);
+        let alpha = alphas(&self.surfaces[i], lk.sizes, k, peek_h);
+        let open_a = openness(&self.surfaces[i], lk.sizes, k, peek_h);
         let glance_on = self.glance();
         let scroll = self.lyric_scroll();
         let since = self
@@ -1416,7 +1489,7 @@ impl App {
         // The focus timer's bubble: where it rests and how big (before the
         // island's borrow below).
         let bubble_rest = self.bubble_region(i);
-        let (bubble_w, bubble_h) = self.bubble_dips();
+        let (bubble_w, bubble_h) = self.bubble_dips(i);
 
         let sf = &mut self.surfaces[i];
         let s = sf.scale;
@@ -1656,8 +1729,8 @@ impl App {
             open: layout::Open::new(sf.open_width, self.lyrics_column && lyrics_filled),
             glance: glance_filled,
             peek_width: peek_u.0,
-            closed_width: self.closed_w,
-            sizes: self.sizes,
+            closed_width: sf.closed_w,
+            sizes: lk.sizes,
             openness: open_a,
             peek_view: sf.peek_view,
             island_scale: k,
@@ -1815,13 +1888,19 @@ impl App {
             // Which islands it's for, decided once as it arrives (an
             // update keeps the first one's).
             let to = self.glance_targets(n.toast);
-            let k = self.settings.island_scale;
             for (i, on) in to.into_iter().enumerate() {
                 let was_muted = std::mem::replace(&mut self.surfaces[i].muted, !on);
                 // Only where it shows, and changing from what showed there.
                 if on && !was_muted {
-                    let peek_h = self.peek_unscaled_at(i).1 * k;
-                    swap_from(&mut self.surfaces[i], self.sizes, k, peek_h, before.clone());
+                    let l = self.look(i);
+                    let peek_h = self.peek_unscaled_at(i).1 * l.scale;
+                    swap_from(
+                        &mut self.surfaces[i],
+                        l.sizes,
+                        l.scale,
+                        peek_h,
+                        before.clone(),
+                    );
                 }
             }
         }
@@ -2467,34 +2546,37 @@ impl App {
     /// The glance's size before `islandScale` on one island's screen, in
     /// DIPs.
     fn peek_unscaled_at(&self, i: usize) -> (f32, f32) {
-        let song_w = self
-            .sizes
-            .peek_width(self.peek_w, self.surfaces[i].peek_most);
+        let sizes = self.look(i).sizes;
+        let song_w = sizes.peek_width(self.peek_w, self.surfaces[i].peek_most);
         peek_unscaled(
             self.notice_at(i),
             self.glance(),
             song_w,
             self.surfaces[i].peek_most,
-            self.sizes,
+            sizes,
         )
     }
 
     /// Measures the closed island's and the song's glance's text, for
     /// their widths: the song's name, and the line being sung if it shows.
-    /// The closed width fits every screen; each island caps the glance's
-    /// to its own (see `Surface::peek_most`).
+    /// The closed width is each island's own, at its sizes; each island
+    /// caps the glance's to its own screen (see `Surface::peek_most`).
     fn fit_text(&mut self) {
-        let Some(r) = self.surfaces.iter().find_map(|s| s.renderer.as_ref()) else {
-            return;
-        };
-        let Some(t) = &self.track else { return };
-        let name = self.song_text.spans(&t.title, &t.artist);
-        self.closed_w = self.sizes.closed_width(r.text_width(&name, true));
-        let line = match self.showing() {
-            Before::Line(l) => vec![(l, false)],
-            _ => name,
-        };
-        self.peek_w = r.text_width(&line, false);
+        if let Some(r) = self.surfaces.iter().find_map(|s| s.renderer.as_ref())
+            && let Some(t) = &self.track
+        {
+            let name = self.song_text.spans(&t.title, &t.artist);
+            self.name_w = r.text_width(&name, true);
+            let line = match self.showing() {
+                Before::Line(l) => vec![(l, false)],
+                _ => name,
+            };
+            self.peek_w = r.text_width(&line, false);
+        }
+        // Each island at its own sizes, new ones too.
+        for sf in &mut self.surfaces {
+            sf.closed_w = sf.look.sizes.closed_width(self.name_w);
+        }
     }
 
     /// How much of the scroll to the line being sung is left.
@@ -2555,13 +2637,13 @@ impl App {
             // Closed, the glance's line changes in place.
             if self.notice.is_none() {
                 let b = self.showing();
-                let k = self.settings.island_scale;
                 for i in 0..self.surfaces.len() {
                     if self.surfaces[i].open {
                         continue;
                     }
-                    let peek_h = self.peek_unscaled_at(i).1 * k;
-                    swap_from(&mut self.surfaces[i], self.sizes, k, peek_h, b.clone());
+                    let l = self.look(i);
+                    let peek_h = self.peek_unscaled_at(i).1 * l.scale;
+                    swap_from(&mut self.surfaces[i], l.sizes, l.scale, peek_h, b.clone());
                 }
             }
             let glance_on = self.glance();
@@ -2647,11 +2729,12 @@ impl App {
             }
         }
         self.fit_text();
-        let k = self.settings.island_scale;
+        let l = self.look(i);
+        let k = l.scale;
         let peeking = self.peeking(i);
         let track_some = self.track.is_some();
         let bubble_to = if self.bubble_on(i) {
-            activity::BUBBLE_GAP + self.bubble_dips().0
+            activity::BUBBLE_GAP + self.bubble_dips(i).0
         } else {
             0.0
         };
@@ -2666,9 +2749,9 @@ impl App {
             peek_size
         } else if track_some {
             // Wide enough for the song's name.
-            (self.closed_w * k, self.sizes.closed.1 * k)
+            (sf.closed_w * k, l.sizes.closed.1 * k)
         } else {
-            (self.sizes.closed.0 * k, self.sizes.closed.1 * k)
+            (l.sizes.closed.0 * k, l.sizes.closed.1 * k)
         };
         if h != sf.height.target {
             sf.shrinking = h < sf.height.value;
@@ -2802,11 +2885,9 @@ impl App {
         self.timer.set_lengths(&self.settings.focus, &s.focus);
         self.settings = s;
         let s = self.settings.clone();
-        self.sizes = s.sizes();
         set_motion(s.animations);
         self.show_surfaces();
         self.texts = texts::texts(s.language, &self.locale);
-        self.placement = s.placement;
         self.monitor = s.monitor.clone();
         self.song_text = s.song_text;
         self.recolor(false);
@@ -2905,7 +2986,6 @@ impl App {
         }
         self.banners_follow();
         self.lyrics_column = s.open_lyrics;
-        self.open_width_setting = s.open_width();
         self.layout();
     }
 
@@ -3010,14 +3090,14 @@ impl App {
                 // draw the new one.)
                 let b = self.showing();
                 if matches!(b, Before::Notice(_)) {
-                    let k = self.settings.island_scale;
                     // (Not on an island the notice wasn't for.)
                     for i in 0..self.surfaces.len() {
                         if self.surfaces[i].muted {
                             continue;
                         }
-                        let peek_h = self.peek_unscaled_at(i).1 * k;
-                        swap_from(&mut self.surfaces[i], self.sizes, k, peek_h, b.clone());
+                        let l = self.look(i);
+                        let peek_h = self.peek_unscaled_at(i).1 * l.scale;
+                        swap_from(&mut self.surfaces[i], l.sizes, l.scale, peek_h, b.clone());
                     }
                 }
                 self.clear_notice();
@@ -3131,14 +3211,14 @@ impl App {
                 // The lyrics' glance stays: the notice gives way to it.
                 if self.notice.is_some() && self.glance() {
                     let b = self.showing();
-                    let k = self.settings.island_scale;
                     // (Not on an island the notice wasn't for.)
                     for i in 0..self.surfaces.len() {
                         if self.surfaces[i].muted {
                             continue;
                         }
-                        let peek_h = self.peek_unscaled_at(i).1 * k;
-                        swap_from(&mut self.surfaces[i], self.sizes, k, peek_h, b.clone());
+                        let l = self.look(i);
+                        let peek_h = self.peek_unscaled_at(i).1 * l.scale;
+                        swap_from(&mut self.surfaces[i], l.sizes, l.scale, peek_h, b.clone());
                     }
                 }
                 // Otherwise it stays while the islands shrink back (so it
@@ -3418,8 +3498,130 @@ impl App {
         Some(LRESULT(0))
     }
 
+    /// The island's look in the menu: the chosen screen's, or the global one.
+    fn menu_look(&self, pick: &MenuPick) -> ScreenLook {
+        match &pick.screen {
+            Some((id, n)) if pick.this => self.settings.for_screen(id, Some(*n)),
+            _ => self.settings.look(),
+        }
+    }
+
+    /// Island `i`'s screen number from 1, left to right (as `screens`
+    /// counts).
+    fn screen_number(&self, i: usize) -> Option<usize> {
+        let sf = self.surfaces.get(i)?;
+        let mons: Vec<Monitor> = self.screens.iter().map(|s| s.0).collect();
+        let at = if sf.id.is_empty() {
+            mons.iter().position(|m| *m == sf.monitor)
+        } else {
+            self.screens
+                .iter()
+                .position(|s| s.1.eq_ignore_ascii_case(&sf.id))
+        }?;
+        monitor::order(&mons)
+            .iter()
+            .position(|&o| o == at)
+            .map(|p| p + 1)
+    }
+
+    /// Whether the look page asks "apply to": the menu is for a screen, and
+    /// there are two or more, or this one has a look of its own to reach.
+    fn has_own_scope(&self, pick: &MenuPick) -> bool {
+        pick.screen.as_ref().is_some_and(|(id, n)| {
+            self.screens.len() >= 2 || self.settings.has_override(id, Some(*n))
+        })
+    }
+
+    /// The look page's entries.
+    fn look_rows(&self, pick: &MenuPick) -> Vec<(u32, render::MenuRow<'static>)> {
+        let t = self.texts;
+        let look = self.menu_look(pick);
+        let row = |kind, label: &'static str, value: &'static str, on, enabled| render::MenuRow {
+            kind,
+            label: label.into(),
+            value,
+            on,
+            enabled,
+        };
+        let (choice, line) = (MenuKind::Choice, MenuKind::Separator);
+        let mut rows = vec![
+            (MENU_BACK, row(MenuKind::Action, t.back, "", false, true)),
+            (0, row(line, "", "", false, false)),
+        ];
+        // With two screens or more (or one that has a look of its own):
+        // for this one, or for all.
+        let per_screen = self.has_own_scope(pick);
+        if per_screen {
+            let value = if pick.this {
+                t.this_screen
+            } else {
+                t.all_screens
+            };
+            rows.push((MENU_SCOPE, row(choice, t.apply_to, value, false, true)));
+        }
+        let place = match look.placement {
+            Placement::Top => t.place_top,
+            Placement::Floating => t.place_floating,
+            Placement::TopLeft => t.place_top_left,
+            Placement::TopRight => t.place_top_right,
+        };
+        let form = match look.form {
+            shape::Form::Notch => t.style_notch,
+            shape::Form::Pill => t.style_pill,
+        };
+        const SIZES: [&str; 7] = ["80 %", "90 %", "100 %", "110 %", "120 %", "130 %", "140 %"];
+        let near = settings::SCALE_STEPS
+            .iter()
+            .enumerate()
+            .min_by(|a, b| {
+                (a.1 - look.scale)
+                    .abs()
+                    .total_cmp(&(b.1 - look.scale).abs())
+            })
+            .map_or(2, |p| p.0);
+        rows.push((MENU_PLACEMENT, row(choice, t.position, place, false, true)));
+        rows.push((MENU_STYLE, row(choice, t.island_style, form, false, true)));
+        rows.push((
+            MENU_SIZE,
+            row(choice, t.island_size, SIZES[near], false, true),
+        ));
+        rows.push((
+            MENU_SMOOTH,
+            row(
+                MenuKind::Toggle,
+                t.smooth_shape,
+                "",
+                look.shape == shape::Style::Smooth,
+                // A pill's corners are its own.
+                look.form == shape::Form::Notch,
+            ),
+        ));
+        if per_screen && let Some((id, n)) = &pick.screen {
+            let own = pick.this && self.settings.has_override(id, Some(*n));
+            rows.push((0, row(line, "", "", false, false)));
+            rows.push((MENU_RESET, row(choice, t.same_as_all, "", false, own)));
+        }
+        rows
+    }
+
     /// The menu's entries and what each does.
     fn menu_rows(&self, startup_on: bool) -> Vec<(u32, render::MenuRow<'static>)> {
+        let pick = self.menu.as_ref().map(|m| m.pick.clone());
+        self.menu_rows_for(
+            startup_on,
+            &pick.unwrap_or(MenuPick {
+                page: MenuPage::Main,
+                screen: None,
+                this: false,
+            }),
+        )
+    }
+
+    fn menu_rows_for(
+        &self,
+        startup_on: bool,
+        pick: &MenuPick,
+    ) -> Vec<(u32, render::MenuRow<'static>)> {
         let t = self.texts;
         let row = |kind, label: &'static str, on, enabled| render::MenuRow {
             kind,
@@ -3448,6 +3650,9 @@ impl App {
                 (MENU_PORTABLE, row(action, t.portable, false, true))
             };
             return vec![(MENU_INSTALL, row(action, install, false, true)), later];
+        }
+        if pick.page == MenuPage::Look {
+            return self.look_rows(pick);
         }
         let lyrics = self.settings.lyrics;
         let checking = self.updater.busy();
@@ -3491,16 +3696,7 @@ impl App {
                     self.settings.notification_glance,
                 ),
             ),
-            (
-                MENU_SMOOTH,
-                row(
-                    toggle,
-                    t.smooth_shape,
-                    self.settings.shape == shape::Style::Smooth,
-                    // A pill's corners are its own.
-                    self.settings.island_style == shape::Form::Notch,
-                ),
-            ),
+            (MENU_LOOK, choice(t.island_look, "\u{203a}", true)),
             (0, row(line, "", false, false)),
             (
                 MENU_STARTUP,
@@ -3571,13 +3767,43 @@ impl App {
             self.close_menu();
             return;
         }
+        self.show_menu(centered, None, None);
+    }
+
+    /// Makes the menu window: at the pointer (`at`, or where it is), on
+    /// `pick`'s page (the usual one by default).
+    fn show_menu(&mut self, centered: bool, at: Option<POINT>, pick: Option<MenuPick>) {
         // The screen in use: the pointer's. Its island draws it, if it has
         // one; else any island.
-        let mut at = POINT::default();
+        let appear = at.is_none();
+        let mut at = at.unwrap_or_default();
         let active = unsafe {
-            let _ = GetCursorPos(&mut at);
+            if appear {
+                let _ = GetCursorPos(&mut at);
+            }
             MonitorFromPoint(at, MONITOR_DEFAULTTONEAREST)
         };
+        let at0 = at;
+        let pick = pick.unwrap_or_else(|| {
+            #[cfg(feature = "qa")]
+            let qa_island = qa::active_screen();
+            #[cfg(not(feature = "qa"))]
+            let qa_island: Option<usize> = None;
+            let island = qa_island.or_else(|| self.surfaces.iter().position(|s| s.mon == active));
+            let screen = island.and_then(|i| {
+                let n = self.screen_number(i)?;
+                Some((self.surfaces[i].id.clone(), n))
+            });
+            // Changes start for the screen that has a look of its own.
+            let this = screen
+                .as_ref()
+                .is_some_and(|(id, n)| self.settings.has_override(id, Some(*n)));
+            MenuPick {
+                page: MenuPage::Main,
+                screen,
+                this,
+            }
+        });
         let drawn = |s: &Surface| s.renderer.is_some();
         let Some((owner, renderer)) = self
             .surfaces
@@ -3598,7 +3824,7 @@ impl App {
         };
         let ms = look.size();
         let kinds: Vec<MenuKind> = self
-            .menu_rows(startup_on)
+            .menu_rows_for(startup_on, &pick)
             .iter()
             .map(|r| r.1.kind)
             .collect();
@@ -3662,6 +3888,9 @@ impl App {
                 startup: startup_on,
                 look,
                 flip: None,
+                pick,
+                at: (at0.x, at0.y),
+                centered,
             });
             self.draw_menu();
             let r = self
@@ -3669,7 +3898,7 @@ impl App {
                 .iter()
                 .find(|s| s.hwnd == owner)
                 .and_then(|s| s.renderer.as_ref());
-            if let (true, Some(r), Some(m)) = (motion(), r, &self.menu) {
+            if let (true, true, Some(r), Some(m)) = (appear, motion(), r, &self.menu) {
                 // It rises from below as Windows' own flyouts do.
                 if let Some(t) = &m.target {
                     let _ = r.menu_appear(t, 6.0 * k);
@@ -3778,6 +4007,110 @@ impl App {
         }
     }
 
+    /// The menu on another page: a new window in the same place, the same
+    /// way it was opened (it doesn't rise again).
+    fn menu_page(&mut self, page: MenuPage) {
+        let Some(m) = &self.menu else {
+            return;
+        };
+        let (mut pick, at, centered) = (m.pick.clone(), m.at, m.centered);
+        let hover = m.hover.is_some();
+        pick.page = page;
+        // The new window is made, shown and focused before the old one goes:
+        // else Windows gives the focus to another app and the new menu would
+        // close as it loses it.
+        let old = self.menu.take();
+        self.show_menu(
+            centered,
+            Some(POINT { x: at.0, y: at.1 }),
+            Some(pick.clone()),
+        );
+        if let Some(o) = old {
+            unsafe {
+                let _ = DestroyWindow(o.hwnd);
+            }
+        }
+        // The keyboard stays on the menu: on the row that leads back.
+        if hover && let Some(m) = &self.menu {
+            let want = if page == MenuPage::Look {
+                MENU_BACK
+            } else {
+                MENU_LOOK
+            };
+            let at = self
+                .menu_rows_for(m.startup, &pick)
+                .iter()
+                .position(|r| r.0 == want);
+            if let (Some(at), Some(m)) = (at, &mut self.menu) {
+                m.hover = Some(at);
+                self.draw_menu();
+            }
+        }
+    }
+
+    /// Changes one thing of the island's look: for the screen the menu is
+    /// for, or for all. A QA run never writes the real file.
+    fn set_look(&mut self, id: u32) {
+        let Some(pick) = self.menu.as_ref().map(|m| m.pick.clone()) else {
+            return;
+        };
+        let look = self.menu_look(&pick);
+        let mut file = self.file.clone();
+        let key = pick.key();
+        let place = next_of(&Placement::ALL, look.placement);
+        let form = next_of(&shape::Form::ALL, look.form);
+        let scale = settings::next_scale(look.scale);
+        let smooth = match look.shape {
+            shape::Style::Smooth => shape::Style::Classic,
+            shape::Style::Classic => shape::Style::Smooth,
+        };
+        let (field, value) = match id {
+            MENU_PLACEMENT => ("placement", Value::from(place.name())),
+            MENU_STYLE => ("islandStyle", Value::from(form.name())),
+            MENU_SIZE => (
+                "islandScale",
+                Value::from((f64::from(scale) * 10.0).round() / 10.0),
+            ),
+            MENU_SMOOTH => ("shape", Value::from(smooth.name())),
+            _ => return,
+        };
+        if let Some(k) = &key {
+            let o = file.screen_entry(k);
+            match id {
+                MENU_PLACEMENT => o.placement = Some(place),
+                MENU_STYLE => o.island_style = Some(form),
+                MENU_SIZE => o.island_scale = Some(scale),
+                _ => o.shape = Some(smooth),
+            }
+        } else {
+            match id {
+                MENU_PLACEMENT => file.placement = place,
+                MENU_STYLE => file.island_style = form,
+                MENU_SIZE => file.island_scale = scale,
+                _ => file.shape = smooth,
+            }
+        }
+        // The command line no longer holds it (for all screens: a screen's
+        // own look was never its to hold).
+        if key.is_none() {
+            match id {
+                MENU_PLACEMENT => self.args.placement = None,
+                MENU_STYLE => self.args.island_style = None,
+                _ => {}
+            }
+        }
+        if qa_mode() {
+            #[cfg(feature = "qa")]
+            qa::menu_set(key.as_deref(), field, value);
+        } else {
+            let _ = match &key {
+                Some(k) => settings_file::set_screen(k, field, value),
+                None => settings_file::set(field, value),
+            };
+        }
+        self.apply(file);
+    }
+
     /// Entry `i` of the menu chosen: a switch flips (its knob gliding) and
     /// the menu stays to flip more; anything else closes it and runs.
     /// `true` for the settings, opened with nothing borrowed.
@@ -3791,6 +4124,15 @@ impl App {
         }
         let (id, row) = rows.swap_remove(i);
         if !row.enabled || row.kind == MenuKind::Separator {
+            return false;
+        }
+        // A page: the menu is made again, as tall as it needs.
+        if id == MENU_LOOK || id == MENU_BACK {
+            self.menu_page(if id == MENU_LOOK {
+                MenuPage::Look
+            } else {
+                MenuPage::Main
+            });
             return false;
         }
         if row.kind == MenuKind::Choice {
@@ -3825,8 +4167,16 @@ impl App {
 
     /// The menu window's messages. `true` when it asks to open the
     /// settings, which is done with nothing borrowed.
-    fn menu_message(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> (Option<LRESULT>, bool) {
-        let Some(m) = &self.menu else {
+    fn menu_message(
+        &mut self,
+        window: HWND,
+        msg: u32,
+        wp: WPARAM,
+        lp: LPARAM,
+    ) -> (Option<LRESULT>, bool) {
+        // The window that was replaced by another page still gets messages
+        // as it goes: they are not the menu's.
+        let Some(m) = self.menu.as_ref().filter(|m| m.hwnd == window) else {
             return (None, false);
         };
         let (scale, startup, hwnd, ms) = (m.scale, m.startup, m.hwnd, m.look.size());
@@ -3954,12 +4304,34 @@ impl App {
                 let _ = startup::set(!startup::is_on());
                 return;
             }
-            MENU_SMOOTH => {
-                file.shape = match self.settings.shape {
-                    shape::Style::Smooth => shape::Style::Classic,
-                    shape::Style::Classic => shape::Style::Smooth,
+            // The island's look, for the screen the menu is for or for all.
+            MENU_PLACEMENT | MENU_STYLE | MENU_SIZE | MENU_SMOOTH => {
+                self.set_look(id);
+                return;
+            }
+            MENU_SCOPE => {
+                if let Some(m) = &mut self.menu {
+                    m.pick.this = !m.pick.this && m.pick.screen.is_some();
+                }
+                return;
+            }
+            // This screen back to what all have.
+            MENU_RESET => {
+                let Some((id, n)) = self.menu.as_ref().and_then(|m| m.pick.screen.clone()) else {
+                    return;
                 };
-                let _ = settings_file::set("shape", Value::String(file.shape.name().into()));
+                let number = n.to_string();
+                let keys: Vec<&str> = [id.as_str(), number.as_str()]
+                    .into_iter()
+                    .filter(|k| !k.is_empty())
+                    .collect();
+                file.reset_screen(&keys);
+                if qa_mode() {
+                    #[cfg(feature = "qa")]
+                    qa::menu_reset(&keys);
+                } else {
+                    let _ = settings_file::reset_screen(&keys);
+                }
                 self.apply(file);
                 return;
             }
@@ -4082,7 +4454,7 @@ extern "system" fn menu_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
     let (handled, settings) = APP.with(|cell| match cell.try_borrow_mut() {
         Ok(mut app) => app
             .as_mut()
-            .map_or((None, false), |a| a.menu_message(msg, wp, lp)),
+            .map_or((None, false), |a| a.menu_message(hwnd, msg, wp, lp)),
         Err(_) => (None, false),
     });
     if settings {
@@ -4192,8 +4564,17 @@ impl Overrides {
     }
 
     fn over(&self, mut s: Settings) -> Settings {
-        s.placement = self.placement.unwrap_or(s.placement);
-        s.island_style = self.island_style.unwrap_or(s.island_style);
+        // The command line wins over a screen's own setting too.
+        if let Some(p) = self.placement {
+            s.placement = p;
+            s.screens.iter_mut().for_each(|(_, o)| o.placement = None);
+        }
+        if let Some(f) = self.island_style {
+            s.island_style = f;
+            s.screens
+                .iter_mut()
+                .for_each(|(_, o)| o.island_style = None);
+        }
         if let Some(m) = &self.monitor {
             s.monitor = m.clone();
         }
@@ -4201,7 +4582,10 @@ impl Overrides {
         s.song_text = self.song_text.unwrap_or(s.song_text);
         s.lyrics |= self.lyrics;
         s.open_lyrics = self.open_lyrics.unwrap_or(s.open_lyrics);
-        s.open_width = self.open_width.or(s.open_width);
+        if self.open_width.is_some() {
+            s.open_width = self.open_width;
+            s.screens.iter_mut().for_each(|(_, o)| o.open_width = None);
+        }
         s.default_page = self.page.unwrap_or(s.default_page);
         s
     }
@@ -4352,7 +4736,6 @@ fn main() -> Result<()> {
             anchor,
             surfaces: Vec::new(),
             screens: Vec::new(),
-            placement: defaults.placement,
             monitor: defaults.monitor.clone(),
             // In QA the script makes up the songs: the real ones go nowhere.
             media: media::Media::start(anchor, if qa_mode() { 0 } else { WM_APP_MEDIA }),
@@ -4375,14 +4758,12 @@ fn main() -> Result<()> {
             lyric_index: None,
             lyric_moved: None,
             lyrics_column: defaults.open_lyrics,
-            open_width_setting: defaults.open_width(),
             theme: None,
             theme_watched: false,
             theme_failed: 0,
             // Fitted to the screen by the first layout.
             peek_w: 0.0,
-            closed_w: layout::CLOSED_MEDIA_WIDTH,
-            sizes: defaults.sizes(),
+            name_w: 0.0,
             page: defaults.default_page,
             page_from: None,
             hot: None,
@@ -4465,7 +4846,8 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_buried;
+    use super::{Overrides, Placement, is_buried};
+    use island_core::settings::Settings;
 
     #[test]
     fn buried_only_under_a_visible_ordinary_window() {
@@ -4473,5 +4855,31 @@ mod tests {
         // Topmost windows above are fine, and so are hidden ordinary ones.
         assert!(!is_buried([(true, true), (false, false), (false, true)]));
         assert!(is_buried([(true, true), (true, false)]));
+    }
+
+    #[test]
+    fn the_command_line_clears_every_screens_own_value() {
+        let s = Settings::parse(
+            r#"{"screens": {"1": {"placement": "floating", "islandStyle": "pill", "openWidth": 600, "islandScale": 1.2}}}"#,
+        )
+        .unwrap();
+        let args = Overrides {
+            placement: Some(Placement::Top),
+            island_style: None,
+            monitor: None,
+            text_align: None,
+            song_text: None,
+            lyrics: false,
+            open_lyrics: None,
+            open_width: Some(700.0),
+            page: None,
+        };
+        let s = args.over(s);
+        let l = s.for_screen("", Some(1));
+        assert_eq!(l.placement, Placement::Top);
+        assert_eq!(l.open_width, 700.0);
+        // What it doesn't set stays the screen's.
+        assert_eq!(l.form, island_core::shape::Form::Pill);
+        assert_eq!(l.scale, 1.2);
     }
 }
