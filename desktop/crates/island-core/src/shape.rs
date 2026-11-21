@@ -16,6 +16,17 @@ pub enum Placement {
 }
 
 impl Placement {
+    pub const ALL: [Self; 4] = [Self::Top, Self::Floating, Self::TopLeft, Self::TopRight];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Top => "top",
+            Self::Floating => "floating",
+            Self::TopLeft => "top-left",
+            Self::TopRight => "top-right",
+        }
+    }
+
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "top" => Some(Self::Top),
@@ -72,6 +83,8 @@ pub enum Form {
 }
 
 impl Form {
+    pub const ALL: [Self; 2] = [Self::Notch, Self::Pill];
+
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "notch" => Some(Self::Notch),
@@ -878,6 +891,12 @@ mod tests {
             assert_eq!(Placement::parse(s), Some(p));
         }
         assert_eq!(Placement::parse("bottom"), None);
+        for p in Placement::ALL {
+            assert_eq!(Placement::parse(p.name()), Some(p));
+        }
+        for f in Form::ALL {
+            assert_eq!(Form::parse(f.name()), Some(f));
+        }
     }
 
     const PLACEMENTS: [Placement; 4] = [

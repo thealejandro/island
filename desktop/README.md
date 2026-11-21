@@ -32,6 +32,9 @@ target/release/island.exe --qa apps/windows/qa/basico.txt --qa-out qa-out
 ```
 
 The exit code is the number of failures. Close the installed island first.
+The scripts are in `apps/windows/qa`: `basico.txt`, `bordes.txt`,
+`dual.txt`, `estilos.txt` and `pantallas.txt` (the settings of each screen,
+with a made-up second one).
 
 ## Download
 
@@ -138,6 +141,7 @@ that isn't valid JSON is ignored until it is fixed.
 | `notificationSound` | `true`, `false` | `true` |
 | `updateCheck` | `true`, `false` | `true` |
 | `lyricsDelay` | `auto`, or 0 to 2000 (ms) | `auto` |
+| `screens` | an object keyed by a screen's id (the one `monitor` keeps) or its number counted left to right, each with any of `placement`, `islandStyle`, `shape`, `islandScale`, `closedWidth`, `closedHeight`, `glanceWidth`, `glanceHeight`, `openWidth`: that screen's own look | `{}` |
 
 While music plays (any app in Windows' media controls), the closed island
 shows the cover, the song and bars that move with the music; a new song
@@ -149,6 +153,30 @@ primary until it is back. With more than one screen chosen (`all` or a
 list), each one gets its own island: each opens and closes on its own, and
 the glances (a new song, the volume, a notification) show on all of them
 at once.
+
+`screens` gives one screen's island a look of its own. Each entry is keyed
+by the screen's id (the interface path `monitor` keeps, which stays the same
+when screens are renumbered) or by its number, left to right from 1; the id
+wins when both name the screen. It holds any of the nine keys named in the
+table, with the same values and ranges, and what it doesn't name is
+inherited from the global setting:
+
+```json
+"screens": {
+  "1": { "placement": "floating", "islandStyle": "pill" },
+  "\\\\?\\DISPLAY#GSM5B09#...": { "islandScale": 1.3 }
+}
+```
+
+A bad value falls back to the global one, and an entry for a screen that
+isn't connected is ignored (and kept in the file). The id changes if the
+monitor moves to another port. The tray menu's "Island look" page edits the
+same file: with two screens or more (or one that has an entry of its own),
+"Apply to" chooses "This screen" or every screen, and "Same as all screens"
+takes the screen's entry out. A screen's `openWidth` can be `"auto"` too,
+even when the global one is a fixed width. The
+command-line flags (`--placement`, `--island-style`, `--open-width`) win over
+every screen's own value.
 
 `lyrics` turns on synced lyrics from [lrclib.net](https://lrclib.net)
 (off by default: it sends the song's name there). The closed island then

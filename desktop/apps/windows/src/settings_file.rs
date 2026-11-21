@@ -50,15 +50,31 @@ fn write(out: &str) -> std::io::Result<()> {
     std::fs::rename(&tmp, path())
 }
 
+/// The text to edit: the template for an empty file; an error while the
+/// file can't be used (never over a file being saved, or one with a typo to
+/// fix by hand).
+fn usable_text() -> std::io::Result<String> {
+    match read() {
+        Some(t) if t.trim().is_empty() => Ok(settings::TEMPLATE.to_string()),
+        Some(t) if Settings::parse(&t).is_some() => Ok(t),
+        _ => Err(std::io::Error::other("settings.json can't be used now")),
+    }
+}
+
 /// Sets one key, keeping the rest of the file (and keys it doesn't know).
 pub fn set(key: &str, value: Value) -> std::io::Result<()> {
-    let text = match read() {
-        Some(t) if t.trim().is_empty() => settings::TEMPLATE.to_string(),
-        // Never over a file being saved, or one with a typo to fix by hand.
-        Some(t) if Settings::parse(&t).is_some() => t,
-        _ => return Err(std::io::Error::other("settings.json can't be used now")),
-    };
-    write(&settings::set(&text, key, value))
+    write(&settings::set(&usable_text()?, key, value))
+}
+
+/// Sets one field of a screen's entry in `screens` (`key`: its device id or
+/// number), keeping the rest of the file.
+pub fn set_screen(key: &str, field: &str, value: Value) -> std::io::Result<()> {
+    write(&settings::set_screen(&usable_text()?, key, field, value))
+}
+
+/// Takes these screens' entries out of `screens`: they follow the settings.
+pub fn reset_screen(keys: &[&str]) -> std::io::Result<()> {
+    write(&settings::reset_screen(&usable_text()?, keys))
 }
 
 /// Makes the file, with every key at its default, if there is none.
