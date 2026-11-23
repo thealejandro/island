@@ -1,0 +1,43 @@
+# QA del idioma: island.exe --qa qa/idioma.txt --qa-out <carpeta>
+# La fila «Idioma» del menú recorre automático, Español, English y Português,
+# sin escribir el archivo real. La isla y el menú se
+# repintan con el idioma elegido; la cuarta pulsación vuelve a automático.
+slow 3
+wait-rest
+background
+grab idioma-isla-auto
+
+# El menú, con el idioma del sistema.
+menu
+grab-menu idioma-menu-auto
+
+# Español.
+menu-language
+wait-rest
+grab-menu idioma-menu-es
+
+# English.
+menu-language
+wait-rest
+grab-menu idioma-menu-en
+
+# Português: el menú, y la isla con un aviso.
+menu-language
+wait-rest
+grab-menu idioma-menu-pt
+menu
+notice "Microfone desligado" "Zoom"
+wait-rest
+grab idioma-aviso-pt
+wait 4000
+wait-rest
+
+# De vuelta a automático.
+menu
+menu-language
+wait-rest
+grab-menu idioma-menu-vuelta
+menu
+wait-rest
+idle 1000
+quit

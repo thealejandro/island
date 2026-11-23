@@ -45,7 +45,7 @@ use island_core::menu::{self, Kind as MenuKind};
 use island_core::monitor::{self, Monitor, MonitorChoice};
 use island_core::pages::{self, FocusButton, Page};
 use island_core::privacy::{Change, Device};
-use island_core::settings::{self, ScreenLook, Settings};
+use island_core::settings::{self, Language, ScreenLook, Settings};
 use island_core::shape::{self, Placement, Rect};
 use island_core::spring::{self, Spring};
 use island_core::texts::{self, Texts};
@@ -53,7 +53,10 @@ use serde_json::Value;
 use windows::Win32::Foundation::{
     E_FAIL, ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
-use windows::Win32::Globalization::{GetTimeFormatEx, GetUserDefaultLocaleName, TIME_NOSECONDS};
+use windows::Win32::Globalization::{
+    GetTimeFormatEx, GetUserDefaultUILanguage, GetUserPreferredUILanguages, LCIDToLocaleName,
+    MUI_LANGUAGE_NAME, TIME_NOSECONDS,
+};
 use windows::Win32::Graphics::Gdi::{
     CombineRgn, CreateRectRgn, DISPLAY_DEVICEW, DeleteObject, EnumDisplayDevicesW,
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO,
@@ -89,7 +92,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_VISIBLE,
 };
 use windows::core::BOOL;
-use windows::core::{Error, HSTRING, PCWSTR, Result, w};
+use windows::core::{Error, HSTRING, PCWSTR, PWSTR, Result, w};
 
 // Sizes in DIPs (1/96 inch); the springs run in DIPs too, so a DPI change
 // doesn't jolt the motion.
@@ -481,6 +484,8 @@ const MENU_PLACEMENT: u32 = 17;
 const MENU_STYLE: u32 = 18;
 const MENU_SIZE: u32 = 19;
 const MENU_RESET: u32 = 20;
+// The language, on the main page: the next one at each click.
+const MENU_LANGUAGE: u32 = 21;
 /// The screens' switches: this plus the screen's index in `App::screens`.
 const MENU_SCREEN: u32 = 100;
 const MENU_CLASS: PCWSTR = w!("IslandMenu");
@@ -990,7 +995,7 @@ struct App {
     file: Settings,
     settings: Settings,
     args: Overrides,
-    /// The system's locale name (`es-MX`), for the texts' language.
+    /// The system's display language (`es-MX`), for the texts' language.
     locale: String,
     texts: &'static Texts,
     tray: Option<tray::Tray>,
@@ -3719,6 +3724,19 @@ impl App {
                     self.settings.notification_glance,
                 ),
             ),
+            (
+                MENU_LANGUAGE,
+                choice(
+                    t.language,
+                    match self.settings.language {
+                        Language::System => t.lang_auto,
+                        Language::Es => "Español",
+                        Language::En => "English",
+                        Language::Pt => "Português",
+                    },
+                    true,
+                ),
+            ),
             (MENU_LOOK, choice(t.island_look, "\u{203a}", true)),
             (0, row(line, "", false, false)),
             (
@@ -4387,6 +4405,15 @@ impl App {
                 self.apply(file);
                 return;
             }
+            MENU_LANGUAGE => {
+                file.language = settings::next_language(self.settings.language);
+                if !qa_mode() {
+                    let name = file.language.name();
+                    let _ = settings_file::set("language", Value::String(name.into()));
+                }
+                self.apply(file);
+                return;
+            }
             MENU_FULL_SCREEN => {
                 // Another screen means nothing with just one island.
                 let all: Vec<monitor::FullScreen> = monitor::FullScreen::ALL
@@ -4544,10 +4571,38 @@ extern "system" fn anchor_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     handled.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wp, lp) })
 }
 
-/// The user's locale name, like `es-MX`.
-fn locale() -> String {
+/// The language Windows shows itself in, like `es-MX`: the first of the
+/// user's preferred display languages, else the one of the display language
+/// (not the region's format, which may be another language). Only reads.
+fn ui_language() -> String {
+    // The preferred ones, as names, one after the other, each ended by a 0
+    // and the list by another.
+    let mut count = 0u32;
+    let mut len = 0u32;
+    let mut list = Vec::new();
+    unsafe {
+        if GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &mut count, None, &mut len).is_ok()
+            && len > 1
+        {
+            list = vec![0u16; len as usize];
+            if GetUserPreferredUILanguages(
+                MUI_LANGUAGE_NAME,
+                &mut count,
+                Some(PWSTR(list.as_mut_ptr())),
+                &mut len,
+            )
+            .is_err()
+            {
+                list.clear();
+            }
+        }
+    }
+    let first = list.split(|&c| c == 0).next().unwrap_or_default();
+    if !first.is_empty() {
+        return String::from_utf16_lossy(first);
+    }
     let mut name = [0u16; 85];
-    let n = unsafe { GetUserDefaultLocaleName(&mut name) };
+    let n = unsafe { LCIDToLocaleName(GetUserDefaultUILanguage() as u32, Some(&mut name), 0) };
     String::from_utf16_lossy(&name[..(n.max(1) - 1) as usize])
 }
 
@@ -4769,7 +4824,7 @@ fn main() -> Result<()> {
         )?;
         ANCHOR.store(anchor.0 as isize, Relaxed);
         let defaults = Settings::default();
-        let locale = locale();
+        let locale = ui_language();
         let texts = texts::texts(defaults.language, &locale);
         let app = App {
             anchor,

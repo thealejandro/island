@@ -738,6 +738,7 @@ node --test 'test/*.test.mjs'
 | `IslandGeometry.js` | Bar edges, placement along the bar, finding the clock |
 | `IslandIdle.js`    | Closed-island notch and hour thread: what to draw, thread length, next minute |
 | `IslandModel.js`   | Pure helpers: player choice, clock, strings, month grid, weather, world times |
+| `IslandStrings.js` | The plugin's texts, generated from `shared/texts.json` by `node scripts/gen-shared.mjs` |
 | `AgendaModel.js`   | Pure helpers for events: repeats, upcoming, reminders, external lines |
 | `IcsModel.js`, `scripts/ics-fetch.sh` | iCalendar calendars: parsing, repeats, time zones; fetching folders, files and links |
 | `LyricsService.qml`, `LyricsModel.js`, `scripts/lyrics-fetch.sh` | Synced lyrics: lrclib.net lookup and cache, LRC parsing, following the song |

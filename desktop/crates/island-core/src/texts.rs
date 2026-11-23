@@ -1,273 +1,13 @@
-//! The desktop apps' words, in English and Spanish.
+//! The desktop apps' words, in English, Spanish and Portuguese.
+//!
+//! The texts themselves are in `shared/texts.json` (the Omarchy plugin reads the
+//! same file); `scripts/gen-shared.mjs` writes `texts_gen.rs` from it.
 
 use crate::settings::Language;
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct Texts {
-    pub nothing_playing: &'static str,
-    /// The tray icon's tooltip.
-    pub name: &'static str,
-    pub lyrics: &'static str,
-    pub open_lyrics: &'static str,
-    /// Windows' banners off: notifications only in the island.
-    pub only_island: &'static str,
-    pub smooth_shape: &'static str,
-    /// The menu's page for the island's look, and its way back.
-    pub island_look: &'static str,
-    pub back: &'static str,
-    /// Which screens a change on that page is for, and its values.
-    pub apply_to: &'static str,
-    /// Back to what all the screens have.
-    pub same_as_all: &'static str,
-    /// Where the island sits, and its values.
-    pub position: &'static str,
-    pub place_top: &'static str,
-    pub place_floating: &'static str,
-    pub place_top_left: &'static str,
-    pub place_top_right: &'static str,
-    /// The island's style, and its values.
-    pub island_style: &'static str,
-    pub style_notch: &'static str,
-    pub style_pill: &'static str,
-    pub island_size: &'static str,
-    /// Where glances show, and its values: every screen or the active one.
-    pub glances_on: &'static str,
-    pub all_screens: &'static str,
-    pub active_screen: &'static str,
-    /// Where a notification goes over a full-screen app, and its values.
-    pub in_full_screen: &'static str,
-    pub fs_here: &'static str,
-    pub fs_other: &'static str,
-    pub fs_hide: &'static str,
-    /// A screen in the menu, by its number (left to right).
-    pub display_n: &'static str,
-    /// Beside the screen that is Windows' main one.
-    pub main_display: &'static str,
-    pub start_with_windows: &'static str,
-    pub open_settings: &'static str,
-    pub quit: &'static str,
-    // The focus timer. `{}` stands for a number.
-    pub focus: &'static str,
-    pub short_break: &'static str,
-    pub long_break: &'static str,
-    /// "round 2 of 4".
-    pub round: &'static str,
-    /// What comes after focus, and after a break.
-    pub then_break: &'static str,
-    pub then_focus: &'static str,
-    pub focus_done: &'static str,
-    /// "{} min break".
-    pub take_break: &'static str,
-    pub break_over: &'static str,
-    pub ready: &'static str,
-    /// Under the time while it's stopped.
-    pub wheel_hint: &'static str,
-    // The glances.
-    pub volume: &'static str,
-    pub muted: &'static str,
-    pub brightness: &'static str,
-    pub microphone_on: &'static str,
-    pub microphone_off: &'static str,
-    pub camera_on: &'static str,
-    pub camera_off: &'static str,
-    pub connected: &'static str,
-    pub disconnected: &'static str,
-    /// The battery: charging, on battery, low, full.
-    pub charging: &'static str,
-    pub on_battery: &'static str,
-    pub battery_low: &'static str,
-    pub fully_charged: &'static str,
-    /// A notification whose app has no name.
-    pub notification: &'static str,
-    /// When a notification arrived: just now.
-    pub now: &'static str,
-    /// An event's reminder: how long is left, `{}` minutes.
-    pub event_in: &'static str,
-    /// After installing: the glance, and where the island now is.
-    pub installed: &'static str,
-    pub in_start_menu: &'static str,
-    /// Opened from outside its install folder: what it offers.
-    pub install: &'static str,
-    pub update: &'static str,
-    pub portable: &'static str,
-    /// The install failed: the glance, and what is left.
-    pub install_failed: &'static str,
-    pub still_portable: &'static str,
-    /// An update failed: the installed one is back.
-    pub update_failed: &'static str,
-    pub still_installed: &'static str,
-    /// "Check for updates" in the menu, and while it looks.
-    pub check_updates: &'static str,
-    pub checking: &'static str,
-    /// What it found: the glances.
-    pub up_to_date: &'static str,
-    pub no_connection: &'static str,
-    pub check_failed: &'static str,
-    pub try_later: &'static str,
-    /// A copy that doesn't update itself: where the new one is.
-    pub new_version: &'static str,
-    pub on_github: &'static str,
-    /// The found update's offer: not now (asked again next time).
-    pub not_now: &'static str,
-}
-
-pub const EN: Texts = Texts {
-    nothing_playing: "Nothing playing",
-    name: "Island",
-    lyrics: "Synced lyrics",
-    open_lyrics: "Lyrics in the open island",
-    only_island: "Notifications only in the island",
-    smooth_shape: "Smooth corners",
-    island_look: "Island look",
-    back: "Back",
-    apply_to: "Apply to",
-    same_as_all: "Same as all screens",
-    position: "Position",
-    place_top: "Top",
-    place_floating: "Floating",
-    place_top_left: "Top left",
-    place_top_right: "Top right",
-    island_style: "Style",
-    style_notch: "Notch",
-    style_pill: "Pill",
-    island_size: "Size",
-    glances_on: "Glances on",
-    all_screens: "All screens",
-    active_screen: "Active screen",
-    in_full_screen: "In full screen",
-    fs_here: "Show here",
-    fs_other: "Other screen",
-    fs_hide: "Don't show",
-    display_n: "Display {}",
-    main_display: "main",
-    start_with_windows: "Start with Windows",
-    open_settings: "Open settings",
-    quit: "Quit",
-    focus: "Focus",
-    short_break: "Break",
-    long_break: "Long break",
-    round: "round {} of {}",
-    then_break: "then a {} min break",
-    then_focus: "then focus",
-    focus_done: "Focus done",
-    take_break: "{} min break",
-    break_over: "Break over",
-    ready: "Ready for another round",
-    wheel_hint: "scroll to change",
-    volume: "Volume",
-    muted: "Muted",
-    brightness: "Brightness",
-    microphone_on: "Microphone in use",
-    microphone_off: "Microphone off",
-    camera_on: "Camera in use",
-    camera_off: "Camera off",
-    connected: "Connected",
-    disconnected: "Disconnected",
-    charging: "Charging",
-    on_battery: "On battery",
-    battery_low: "Battery low",
-    fully_charged: "Fully charged",
-    notification: "Notification",
-    now: "now",
-    event_in: "in {} min",
-    installed: "Island installed",
-    in_start_menu: "In the Start menu",
-    install: "Install Island",
-    update: "Update Island",
-    portable: "Use without installing",
-    install_failed: "Couldn't install Island",
-    still_portable: "It runs without installing",
-    update_failed: "Couldn't update Island",
-    still_installed: "The old one stays",
-    check_updates: "Check for updates",
-    checking: "Checking…",
-    up_to_date: "Island is up to date",
-    no_connection: "No connection",
-    check_failed: "Couldn't check",
-    try_later: "Try again later",
-    new_version: "A new version",
-    on_github: "on GitHub",
-    not_now: "Not now",
-};
-
-pub const ES: Texts = Texts {
-    nothing_playing: "Nada en reproducción",
-    name: "Island",
-    lyrics: "Letras sincronizadas",
-    open_lyrics: "Letra en la isla abierta",
-    only_island: "Notificaciones solo en la isla",
-    smooth_shape: "Esquinas suaves",
-    island_look: "Aspecto de la isla",
-    back: "Atrás",
-    apply_to: "Aplicar a",
-    same_as_all: "Igual que todas",
-    position: "Posición",
-    place_top: "Arriba",
-    place_floating: "Flotante",
-    place_top_left: "Arriba izquierda",
-    place_top_right: "Arriba derecha",
-    island_style: "Estilo",
-    style_notch: "Muesca",
-    style_pill: "Píldora",
-    island_size: "Tamaño",
-    glances_on: "Avisos en",
-    all_screens: "Todas",
-    active_screen: "La activa",
-    in_full_screen: "En pantalla completa",
-    fs_here: "Aquí",
-    fs_other: "Otra pantalla",
-    fs_hide: "No mostrar",
-    display_n: "Pantalla {}",
-    main_display: "principal",
-    start_with_windows: "Iniciar con Windows",
-    open_settings: "Abrir ajustes",
-    quit: "Salir",
-    focus: "Enfoque",
-    short_break: "Descanso",
-    long_break: "Descanso largo",
-    round: "ronda {} de {}",
-    then_break: "luego {} min de descanso",
-    then_focus: "luego, enfoque",
-    focus_done: "Enfoque terminado",
-    take_break: "Descanso de {} min",
-    break_over: "Descanso terminado",
-    ready: "Listo para otra ronda",
-    wheel_hint: "rueda para cambiar",
-    volume: "Volumen",
-    muted: "Silenciado",
-    brightness: "Brillo",
-    microphone_on: "Micrófono en uso",
-    microphone_off: "Micrófono apagado",
-    camera_on: "Cámara en uso",
-    camera_off: "Cámara apagada",
-    connected: "Conectado",
-    disconnected: "Desconectado",
-    charging: "Cargando",
-    on_battery: "Con batería",
-    battery_low: "Batería baja",
-    fully_charged: "Carga completa",
-    notification: "Notificación",
-    now: "ahora",
-    event_in: "en {} min",
-    installed: "Isla instalada",
-    in_start_menu: "En el menú Inicio",
-    install: "Instalar Island",
-    update: "Actualizar Island",
-    portable: "Usar sin instalar",
-    install_failed: "No se pudo instalar Island",
-    still_portable: "Sigue sin instalar",
-    update_failed: "No se pudo actualizar Island",
-    still_installed: "Sigue la anterior",
-    check_updates: "Buscar actualizaciones",
-    checking: "Buscando…",
-    up_to_date: "Island está al día",
-    no_connection: "Sin conexión",
-    check_failed: "No se pudo buscar",
-    try_later: "Prueba más tarde",
-    new_version: "Versión nueva",
-    on_github: "en GitHub",
-    not_now: "Ahora no",
-};
+#[path = "texts_gen.rs"]
+mod texts_gen;
+pub use texts_gen::*;
 
 /// `text` with each `{}` replaced by the next of `args`.
 pub fn fill(text: &str, args: &[u32]) -> String {
@@ -289,6 +29,7 @@ pub fn fill(text: &str, args: &[u32]) -> String {
 pub fn texts(language: Language, locale: &str) -> &'static Texts {
     match language.resolve(locale) {
         Language::Es => &ES,
+        Language::Pt => &PT,
         _ => &EN,
     }
 }
@@ -300,18 +41,21 @@ mod tests {
     #[test]
     fn picks_by_setting_then_system() {
         assert_eq!(texts(Language::System, "es-ES"), &ES);
+        assert_eq!(texts(Language::System, "pt-BR"), &PT);
         assert_eq!(texts(Language::System, "de-DE"), &EN);
         assert_eq!(texts(Language::En, "es-ES"), &EN);
         assert_eq!(texts(Language::Es, "en-US"), &ES);
+        assert_eq!(texts(Language::Pt, "en-US"), &PT);
     }
 
     #[test]
     fn numbers_fill_in() {
         assert_eq!(fill(ES.round, &[2, 4]), "ronda 2 de 4");
+        assert_eq!(fill(PT.round, &[2, 4]), "rodada 2 de 4");
         assert_eq!(fill(EN.take_break, &[5]), "5 min break");
         assert_eq!(fill("{} y {}", &[1]), "1 y ");
         assert_eq!(fill("sin nada", &[3]), "sin nada");
-        for t in [&EN, &ES] {
+        for t in [&EN, &ES, &PT] {
             assert_eq!(t.round.matches("{}").count(), 2);
             assert_eq!(t.then_break.matches("{}").count(), 1);
             assert_eq!(t.take_break.matches("{}").count(), 1);
@@ -322,88 +66,20 @@ mod tests {
 
     #[test]
     fn every_text_is_there() {
-        for t in [&EN, &ES] {
-            for s in [
-                t.nothing_playing,
-                t.name,
-                t.lyrics,
-                t.open_lyrics,
-                t.only_island,
-                t.smooth_shape,
-                t.island_look,
-                t.back,
-                t.apply_to,
-                t.same_as_all,
-                t.position,
-                t.place_top,
-                t.place_floating,
-                t.place_top_left,
-                t.place_top_right,
-                t.island_style,
-                t.style_notch,
-                t.style_pill,
-                t.island_size,
-                t.glances_on,
-                t.all_screens,
-                t.active_screen,
-                t.in_full_screen,
-                t.fs_here,
-                t.fs_other,
-                t.fs_hide,
-                t.display_n,
-                t.main_display,
-                t.start_with_windows,
-                t.open_settings,
-                t.quit,
-                t.focus,
-                t.short_break,
-                t.long_break,
-                t.round,
-                t.then_break,
-                t.then_focus,
-                t.focus_done,
-                t.take_break,
-                t.break_over,
-                t.ready,
-                t.wheel_hint,
-                t.volume,
-                t.muted,
-                t.brightness,
-                t.event_in,
-                t.microphone_on,
-                t.microphone_off,
-                t.camera_on,
-                t.camera_off,
-                t.connected,
-                t.disconnected,
-                t.charging,
-                t.on_battery,
-                t.battery_low,
-                t.fully_charged,
-                t.installed,
-                t.in_start_menu,
-                t.install,
-                t.update,
-                t.portable,
-                t.install_failed,
-                t.still_portable,
-                t.update_failed,
-                t.still_installed,
-                t.check_updates,
-                t.checking,
-                t.up_to_date,
-                t.no_connection,
-                t.check_failed,
-                t.try_later,
-                t.new_version,
-                t.on_github,
-                t.not_now,
-                t.notification,
-                t.now,
-            ] {
+        for t in [&EN, &ES, &PT] {
+            for s in all(t) {
                 assert!(!s.trim().is_empty());
                 // The tray's tooltip and menu take up to 127 characters.
                 assert!(s.chars().count() < 64);
+            }
+        }
+    }
+
+    #[test]
+    fn every_language_has_the_same_numbers() {
+        for t in [&ES, &PT] {
+            for (s, e) in all(t).into_iter().zip(all(&EN)) {
+                assert_eq!(s.matches("{}").count(), e.matches("{}").count(), "{s}");
             }
         }
     }

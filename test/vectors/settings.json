@@ -218,6 +218,27 @@
       }
     ],
     "expect": {
+      "language": "pt",
+      "defaultPage": "home",
+      "lyrics": false,
+      "openLyrics": true,
+      "textAlign": "center",
+      "songText": "title-artist",
+      "focusMinutes": 25,
+      "breakMinutes": 5,
+      "longBreakMinutes": 15,
+      "longBreakEvery": 4,
+      "reminderLead": 10
+    }
+  },
+  {
+    "fn": "normalize_shared",
+    "args": [
+      {
+        "language": "auto"
+      }
+    ],
+    "expect": {
       "language": "",
       "defaultPage": "home",
       "lyrics": false,
@@ -229,9 +250,6 @@
       "longBreakMinutes": 15,
       "longBreakEvery": 4,
       "reminderLead": 10
-    },
-    "skip": {
-      "js": "the plugin has Portuguese; the core gets it with the shared texts (phase 2 of #80)"
     }
   },
   {

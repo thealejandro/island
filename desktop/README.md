@@ -101,7 +101,7 @@ that isn't valid JSON is ignored until it is fixed.
 
 | Key | Values | Default |
 | --- | --- | --- |
-| `language` | `""` (the system's), `en`, `es` | `""` |
+| `language` | `auto` (Windows' display language; `""` is the same), `en`, `es`, `pt` (Brazilian Portuguese). The menu's "Language" row goes through them | `auto` |
 | `placement` | `top`, `floating`, `top-left`, `top-right` | `top` |
 | `shape` | `smooth` (continuous corners, half the body's height up to 36: closed it is a capsule), `classic` (circular corners of a fixed 24) | `smooth` |
 | `islandStyle` | `notch` (hangs from the edge with ears at `top`; a rounded rectangle at the other placements, as before), `pill` (a capsule with a soft shadow, a small gap below the edge at `top`; `shape` doesn't apply) | `notch` |
