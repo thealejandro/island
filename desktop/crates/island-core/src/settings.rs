@@ -25,25 +25,53 @@ pub enum Language {
     System,
     En,
     Es,
+    Pt,
 }
 
 impl Language {
+    /// `""` (what the file said before) and `"auto"` are both the system's.
     pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "" => Some(Self::System),
+            "" | "auto" => Some(Self::System),
             "en" => Some(Self::En),
             "es" => Some(Self::Es),
+            "pt" => Some(Self::Pt),
             _ => None,
         }
     }
 
-    /// English or Spanish, given the system's locale name (`es-MX`).
-    pub fn resolve(self, locale: &str) -> Self {
+    /// How the file spells it.
+    pub fn name(self) -> &'static str {
         match self {
-            Self::System if locale.to_ascii_lowercase().starts_with("es") => Self::Es,
+            Self::System => "auto",
+            Self::En => "en",
+            Self::Es => "es",
+            Self::Pt => "pt",
+        }
+    }
+
+    /// English, Spanish or Portuguese, given the system's language name
+    /// (`es-MX`, `pt-BR`); anything else is English.
+    pub fn resolve(self, locale: &str) -> Self {
+        let locale = locale.to_ascii_lowercase();
+        let base = locale.split(['-', '_']).next().unwrap_or_default();
+        match self {
+            Self::System if base == "es" => Self::Es,
+            Self::System if base == "pt" => Self::Pt,
             Self::System => Self::En,
             chosen => chosen,
         }
+    }
+}
+
+/// The next language for the menu's row: the system's, Spanish, English,
+/// Portuguese, and the system's again.
+pub fn next_language(now: Language) -> Language {
+    match now {
+        Language::System => Language::Es,
+        Language::Es => Language::En,
+        Language::En => Language::Pt,
+        Language::Pt => Language::System,
     }
 }
 
@@ -360,7 +388,7 @@ impl Default for Settings {
 /// What a new `settings.json` holds: every key, at its default, so they
 /// can be found and changed by hand.
 pub const TEMPLATE: &str = r#"{
-  "language": "",
+  "language": "auto",
   "placement": "top",
   "shape": "smooth",
   "islandStyle": "notch",
@@ -1156,7 +1184,52 @@ mod tests {
         assert_eq!(Language::System.resolve("en-US"), Language::En);
         assert_eq!(Language::System.resolve(""), Language::En);
         assert_eq!(Language::En.resolve("es-MX"), Language::En);
+        assert_eq!(Language::System.resolve("pt-BR"), Language::Pt);
+        assert_eq!(Language::System.resolve("pt-PT"), Language::Pt);
+        assert_eq!(Language::System.resolve("pt"), Language::Pt);
+        assert_eq!(Language::System.resolve("PT_br"), Language::Pt);
+        // Only the language counts, not what a longer name starts with.
+        assert_eq!(Language::System.resolve("est-EE"), Language::En);
+        assert_eq!(Language::System.resolve("pl-PL"), Language::En);
+        assert_eq!(Language::Es.resolve("pt-BR"), Language::Es);
+        assert_eq!(Language::Pt.resolve("en-US"), Language::Pt);
+        // The file's "" and "auto" are the same; each name reads back.
         assert_eq!(Language::parse(""), Some(Language::System));
+        assert_eq!(Language::parse("auto"), Some(Language::System));
+        assert_eq!(Language::parse("pt"), Some(Language::Pt));
+        assert_eq!(Language::parse("pt-BR"), None);
+        for l in [Language::System, Language::En, Language::Es, Language::Pt] {
+            assert_eq!(Language::parse(l.name()), Some(l));
+        }
+    }
+
+    #[test]
+    fn next_language_goes_around() {
+        let mut l = Language::System;
+        let mut seen = vec![l];
+        for _ in 0..4 {
+            l = next_language(l);
+            seen.push(l);
+        }
+        assert_eq!(
+            seen,
+            [
+                Language::System,
+                Language::Es,
+                Language::En,
+                Language::Pt,
+                Language::System
+            ]
+        );
+    }
+
+    #[test]
+    fn a_new_file_has_the_language_on_auto() {
+        let v: Value = serde_json::from_str(TEMPLATE).unwrap();
+        assert_eq!(v["language"], json!("auto"));
+        assert_eq!(parse(TEMPLATE).language, Language::System);
+        assert_eq!(parse(r#"{"language": "pt"}"#).language, Language::Pt);
+        assert_eq!(parse(r#"{"language": ""}"#).language, Language::System);
     }
 
     const ID: &str = r"\\?\DISPLAY#GSM5B09#5&2a6b5e3&0&UID4352#{e6f07b5f}";
@@ -1389,7 +1462,7 @@ mod tests {
         let text = reset_screen(&text, &["2"]);
         let v: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["screens"], json!({}));
-        assert_eq!(v["language"], json!(""));
+        assert_eq!(v["language"], json!("auto"));
         assert_eq!(parse(&text), Settings::default());
     }
 

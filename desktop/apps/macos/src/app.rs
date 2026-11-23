@@ -167,7 +167,12 @@ impl IslandView {
         let time = NSDateFormatter::new();
         time.setDateStyle(NSDateFormatterStyle::NoStyle);
         time.setTimeStyle(NSDateFormatterStyle::ShortStyle);
-        let locale = NSLocale::currentLocale().localeIdentifier().to_string();
+        // The language the Mac shows itself in (`pt-BR`), not the region's
+        // format: the first of the user's preferred ones.
+        let locale = NSLocale::preferredLanguages()
+            .firstObject()
+            .map(|l| l.to_string())
+            .unwrap_or_else(|| NSLocale::currentLocale().localeIdentifier().to_string());
         let this = Self::alloc(mtm).set_ivars(Ivars {
             width: Cell::new(Spring::at(CLOSED.0)),
             height: Cell::new(Spring::at(CLOSED.1)),

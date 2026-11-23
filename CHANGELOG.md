@@ -24,6 +24,13 @@ project follows [Semantic Versioning](https://semver.org/).
   (`timedatectl list-timezones`, read once when the field is first used).
   (#24)
 - Brazilian Portuguese interface, including settings and calendar dates. (#26)
+- Windows and macOS: Brazilian Portuguese, and the texts come from the same
+  file as Omarchy's (`shared/texts.json`; `node scripts/gen-shared.mjs`
+  writes `IslandStrings.js` and the desktop's `texts_gen.rs`). The language
+  follows the display language, not the region's format. On Windows the tray
+  menu's "Language" row switches between automatic, Español, English and
+  Português without touching Windows' own settings; `language` is `auto` by
+  default. (#154)
 - The island's own bar button (`widgetIcon`) shows the Silence glyph
   while Silence is on and the island holds the notifications. (#37)
 

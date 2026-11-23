@@ -40,7 +40,9 @@
 //!   when the exe is opened again, and its picture. `menu-screen <j>`: its
 //!   switch for screen `j`. `menu-look look|back|scope|placement|style|size|
 //!   smooth|reset`: the look page's rows (the page, the screen it is for, or
-//!   what each changes), never written to the real file.
+//!   what each changes), never written to the real file. `menu-language`: the
+//!   language row, one step to the next language (auto, Español, English,
+//!   Português), also never written.
 //! - `quit`.
 
 use super::*;
@@ -771,6 +773,21 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
             };
             let Some(i) = app.menu_rows(startup).iter().position(|r| r.0 == id) else {
                 return Err(format!("«menu-look»: no hay fila «{what}» en esta página"));
+            };
+            let _ = app.menu_choose(i);
+        }
+        // The menu's language row: the next language, as a click does (never
+        // written to the real file). `menu-language` alone is one step.
+        "menu-language" => {
+            let Some(startup) = app.menu.as_ref().map(|m| m.startup) else {
+                return Err("«menu-language»: el menú no está abierto".into());
+            };
+            let Some(i) = app
+                .menu_rows(startup)
+                .iter()
+                .position(|r| r.0 == MENU_LANGUAGE)
+            else {
+                return Err("«menu-language»: no hay fila de idioma en esta página".into());
             };
             let _ = app.menu_choose(i);
         }

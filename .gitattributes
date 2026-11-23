@@ -1,1 +1,4 @@
 test/vectors/*.json text eol=lf
+shared/*.json text eol=lf
+IslandStrings.js text eol=lf
+desktop/crates/island-core/src/texts_gen.rs text eol=lf

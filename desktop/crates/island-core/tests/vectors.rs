@@ -1051,6 +1051,7 @@ fn shared_settings(raw: &str) -> Value {
         island_core::settings::Language::System => "",
         island_core::settings::Language::En => "en",
         island_core::settings::Language::Es => "es",
+        island_core::settings::Language::Pt => "pt",
     };
     let page = match s.default_page {
         island_core::pages::Page::Home => "home",
@@ -1118,11 +1119,10 @@ fn settings_cases() -> Cases {
     add(json!({ "reminderLead": 0 }), None);
     add(json!({ "ghost": 1, "lyrics": true }), None);
 
+    add(json!({ "language": "pt" }), None);
+    add(json!({ "language": "auto" }), None);
+
     // Where the two read the same value differently.
-    add(
-        json!({ "language": "pt" }),
-        Some("the plugin has Portuguese; the core gets it with the shared texts (phase 2 of #80)"),
-    );
     add(
         json!({ "defaultPage": "calendar" }),
         Some("the plugin has the calendar and world pages; the core only home and focus"),

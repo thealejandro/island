@@ -768,6 +768,7 @@ node --test 'test/*.test.mjs'
 | `IslandGeometry.js` | Bordes de la barra, posición a lo largo de ella, búsqueda del reloj |
 | `IslandIdle.js`    | Muesca de la isla cerrada y hilo de la hora: qué dibujar, largo del hilo, siguiente minuto |
 | `IslandModel.js`   | Funciones puras: elegir reproductor, reloj, textos, mes, clima, horas del mundo |
+| `IslandStrings.js` | Textos del plugin, generados desde `shared/texts.json` con `node scripts/gen-shared.mjs` |
 | `AgendaModel.js`   | Funciones puras de eventos: repeticiones, próximos, avisos, líneas externas |
 | `IcsModel.js`, `scripts/ics-fetch.sh` | Calendarios iCalendar: lectura, repeticiones, husos; descarga de carpetas, archivos y enlaces |
 | `LyricsService.qml`, `LyricsModel.js`, `scripts/lyrics-fetch.sh` | Letra sincronizada: búsqueda en lrclib.net y caché, lectura de LRC, seguir la canción |
