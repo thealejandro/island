@@ -33,8 +33,9 @@ target/release/island.exe --qa apps/windows/qa/basico.txt --qa-out qa-out
 
 The exit code is the number of failures. Close the installed island first.
 The scripts are in `apps/windows/qa`: `basico.txt`, `bordes.txt`,
-`dual.txt`, `estilos.txt` and `pantallas.txt` (the settings of each screen,
-with a made-up second one).
+`dual.txt`, `estilos.txt`, `pantallas.txt` (the settings of each screen,
+with a made-up second one) and `ventanas.txt` (the closed island making way
+for a window of the QA's own).
 
 ## Download
 
@@ -122,6 +123,7 @@ that isn't valid JSON is ignored until it is fixed.
 | `animations` | `system` (as Windows' "Animation effects"), `on`, `off` (no wobble, crossfades, ring or comet: the island goes straight to its size) | `system` |
 | `hideInFullScreen` | `true`, `false` (hides the island on a screen while an app is in full screen there; a notification's glance still comes out if `notificationsInFullScreen` allows it) | `true` |
 | `dualActivity` | `true`, `false` (while a song is loaded and the focus timer is on, the closed island shows the timer in a small bubble beside it; `false`: the song alone, as before) | `true` |
+| `dodgeWindows` | `true`, `false` (Windows: while a window's top edge is under the closed island, it shrinks to a small notch so the controls there can be clicked; `false`: it stays as it is; top bars and docks of other programs that are not tool windows count as windows too) | `true` |
 | `defaultPage` | `home`, `focus` | `home` |
 | `focusMinutes` | 5 to 120 | `25` |
 | `breakMinutes` | 1 to 30 | `5` |
