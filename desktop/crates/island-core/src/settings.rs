@@ -238,6 +238,9 @@ pub struct Settings {
     /// While a song is loaded and the focus timer is on, the closed island
     /// shows the timer in a small bubble beside it.
     pub dual_activity: bool,
+    /// The closed island shrinks to a small notch while a window's top edge
+    /// is under it (see `dodge`), so the controls beneath stay reachable.
+    pub dodge_windows: bool,
     /// What each screen has of its own over the settings above, by the
     /// screen's device id or its number (see [`Settings::screen`]).
     pub screens: Vec<(String, ScreenOverride)>,
@@ -380,6 +383,7 @@ impl Default for Settings {
             animations: Animations::System,
             hide_in_full_screen: true,
             dual_activity: true,
+            dodge_windows: true,
             screens: Vec::new(),
         }
     }
@@ -410,6 +414,7 @@ pub const TEMPLATE: &str = r#"{
   "animations": "system",
   "hideInFullScreen": true,
   "dualActivity": true,
+  "dodgeWindows": true,
   "focusMinutes": 25,
   "breakMinutes": 5,
   "longBreakMinutes": 15,
@@ -578,6 +583,7 @@ impl Settings {
                 .unwrap_or(d.animations),
             hide_in_full_screen: flag("hideInFullScreen", d.hide_in_full_screen),
             dual_activity: flag("dualActivity", d.dual_activity),
+            dodge_windows: flag("dodgeWindows", d.dodge_windows),
             screens: Self::parse_screens(o.get("screens")),
         })
     }
@@ -1168,6 +1174,10 @@ mod tests {
         assert!(parse("{}").dual_activity);
         assert!(!parse(r#"{"dualActivity": false}"#).dual_activity);
         assert!(parse(r#"{"dualActivity": "no"}"#).dual_activity);
+        assert!(parse(TEMPLATE).dodge_windows);
+        assert!(parse("{}").dodge_windows);
+        assert!(!parse(r#"{"dodgeWindows": false}"#).dodge_windows);
+        assert!(parse(r#"{"dodgeWindows": "no"}"#).dodge_windows);
         assert_eq!(parse(TEMPLATE).glance_screen, GlanceScreen::All);
         let s = parse(r#"{"glanceScreen": "active"}"#);
         assert_eq!(s.glance_screen, GlanceScreen::Active);

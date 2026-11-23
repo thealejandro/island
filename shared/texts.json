@@ -273,6 +273,7 @@
   { "id": "allScreens", "os": ["windows", "macos"], "en": "All screens", "es": "Todas", "pt": "Todas" },
   { "id": "activeScreen", "os": ["windows", "macos"], "en": "Active screen", "es": "La activa", "pt": "A ativa" },
   { "id": "inFullScreen", "os": ["windows", "macos"], "note": "Where a notification goes over a full-screen app, and its values.", "en": "In full screen", "es": "En pantalla completa", "pt": "Em tela cheia" },
+  { "id": "dodgeWindows", "os": ["windows", "macos"], "note": "The closed island shrinks to a notch while a window's top is under it.", "en": "Make way for windows", "es": "Apartarse de las ventanas", "pt": "Dar espaço às janelas" },
   { "id": "fsHere", "os": ["windows", "macos"], "en": "Show here", "es": "Aquí", "pt": "Aqui" },
   { "id": "fsOther", "os": ["windows", "macos"], "en": "Other screen", "es": "Otra pantalla", "pt": "Outra tela" },
   { "id": "fsHide", "os": ["windows", "macos"], "en": "Don't show", "es": "No mostrar", "pt": "Não mostrar" },

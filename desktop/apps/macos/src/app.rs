@@ -28,6 +28,7 @@ use objc2_foundation::{
 use crate::geometry::arc_corner;
 
 // The Windows app's sizes, in points.
+// #160: keep the closed island within the menu bar with dodge::bar_fit
 const CLOSED: (f32, f32) = (180.0, 32.0);
 const OPEN: (f32, f32) = (OPEN_WIDTH, OPEN_HEIGHT);
 const RADIUS: f32 = 18.0;

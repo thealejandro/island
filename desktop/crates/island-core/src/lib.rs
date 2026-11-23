@@ -11,6 +11,7 @@ pub mod battery;
 pub mod bluetooth;
 pub mod brightness;
 pub mod color;
+pub mod dodge;
 pub mod focus;
 pub mod glance;
 pub mod icon;

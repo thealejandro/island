@@ -37,6 +37,7 @@ use island_core::activity;
 use island_core::agenda as core_agenda;
 use island_core::battery::Note as BatteryNote;
 use island_core::bluetooth::Event as BtEvent;
+use island_core::dodge;
 use island_core::focus::{self, Ended, Lengths, Phase};
 use island_core::glance;
 use island_core::install::Offer;
@@ -113,6 +114,8 @@ fn frame_for(placement: Placement, form: shape::Form, s: f32) -> shape::Frame {
     }
 }
 const HOVER_DELAY_MS: u32 = 120;
+/// The least height, in DIPs, a floating notch keeps to be hovered.
+const DODGED_HOVER: f32 = 10.0;
 
 const HOVER_TIMER: usize = 1;
 /// Moves a menu switch's knob, every 15 ms for `KNOB_MS` (on the menu's window).
@@ -275,6 +278,10 @@ const WM_APP_UPDATE: u32 = WM_APP + 19;
 /// Another window came to the front: the islands may have been put under
 /// the ordinary windows by another app (a tiling window manager).
 const WM_APP_ZORDER: u32 = WM_APP + 23;
+/// A window moved, resized, minimized or restored: the islands check
+/// whether one of them must make way for it (#160). `wparam` 1: all the
+/// windows; 0: only the front one moved.
+const WM_APP_WINDOWS: u32 = WM_APP + 24;
 
 /// The hook that tells of windows coming to the front (0: none).
 static ZORDER_HOOK: AtomicIsize = AtomicIsize::new(0);
@@ -322,7 +329,7 @@ fn follow_foreground() {
     ZORDER_HOOK.store(hook.0 as isize, Relaxed);
 }
 
-/// Ends [`follow_foreground`].
+/// Ends [`follow_foreground`] (and the windows' hooks).
 fn unfollow_foreground() {
     use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, UnhookWinEvent};
     let hook = ZORDER_HOOK.swap(0, Relaxed);
@@ -331,6 +338,194 @@ fn unfollow_foreground() {
             let _ = UnhookWinEvent(HWINEVENTHOOK(hook as *mut _));
         }
     }
+    follow_windows(false);
+}
+
+/// The hooks that tell of windows being moved or minimized (0: none), for
+/// the islands that make way for them (`dodgeWindows`).
+static WINDOWS_HOOKS: [AtomicIsize; 2] = [AtomicIsize::new(0), AtomicIsize::new(0)];
+/// The hook on the front window's own moves (0: none), and that window.
+static FRONT_HOOK: AtomicIsize = AtomicIsize::new(0);
+static FRONT: AtomicIsize = AtomicIsize::new(0);
+/// `WM_APP_WINDOWS` is asked for and not handled yet, for all the windows
+/// and for the front one's move: one of each is enough.
+static WINDOWS_PENDING: AtomicBool = AtomicBool::new(false);
+static FRONT_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// Asks the anchor for `WM_APP_WINDOWS` unless one is waiting.
+fn ask_windows(full: bool) {
+    let pending = if full {
+        &WINDOWS_PENDING
+    } else {
+        &FRONT_PENDING
+    };
+    if !pending.swap(true, Relaxed) {
+        let anchor = HWND(ANCHOR.load(Relaxed) as *mut _);
+        unsafe {
+            if PostMessageW(
+                Some(anchor),
+                WM_APP_WINDOWS,
+                WPARAM(full as usize),
+                LPARAM(0),
+            )
+            .is_err()
+            {
+                pending.store(false, Relaxed);
+            }
+        }
+    }
+}
+
+/// A window ended a move or a resize, or was minimized or restored (out of
+/// context: only passes it on).
+unsafe extern "system" fn windows_event(
+    _: windows::Win32::UI::Accessibility::HWINEVENTHOOK,
+    _: u32,
+    _: HWND,
+    _: i32,
+    _: i32,
+    _: u32,
+    _: u32,
+) {
+    ask_windows(true);
+}
+
+/// The front window's own location changed (out of context). Only the
+/// window itself counts, not its children, caret or cursor.
+unsafe extern "system" fn front_moved(
+    _: windows::Win32::UI::Accessibility::HWINEVENTHOOK,
+    _: u32,
+    hwnd: HWND,
+    id_object: i32,
+    id_child: i32,
+    _: u32,
+    _: u32,
+) {
+    use windows::Win32::UI::WindowsAndMessaging::OBJID_WINDOW;
+    if hwnd.0 as isize == FRONT.load(Relaxed) && id_object == OBJID_WINDOW.0 && id_child == 0 {
+        ask_windows(false);
+    }
+}
+
+/// Follows the windows being moved or minimized while `on` (the setting, and
+/// never in QA), on this thread: two narrow hooks, so nothing runs without
+/// an event. Idempotent.
+fn follow_windows(on: bool) {
+    use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MOVESIZEEND,
+        WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+    };
+    if on {
+        let ranges = [
+            (EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MOVESIZEEND),
+            (EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND),
+        ];
+        for (slot, (lo, hi)) in WINDOWS_HOOKS.iter().zip(ranges) {
+            // Each slot on its own: one that failed is tried again, and none
+            // is set twice (a hook that leaked could not be taken off).
+            if slot.load(Relaxed) != 0 {
+                continue;
+            }
+            let hook = unsafe {
+                SetWinEventHook(
+                    lo,
+                    hi,
+                    None,
+                    Some(windows_event),
+                    0,
+                    0,
+                    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+                )
+            };
+            if !hook.is_invalid() {
+                slot.store(hook.0 as isize, Relaxed);
+            }
+        }
+        if FRONT_HOOK.load(Relaxed) == 0 {
+            follow_front();
+        }
+    } else {
+        for slot in &WINDOWS_HOOKS {
+            let hook = slot.swap(0, Relaxed);
+            if hook != 0 {
+                unsafe {
+                    let _ = UnhookWinEvent(HWINEVENTHOOK(hook as *mut _));
+                }
+            }
+        }
+        unhook_front();
+    }
+}
+
+fn unhook_front() {
+    use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, UnhookWinEvent};
+    FRONT.store(0, Relaxed);
+    let hook = FRONT_HOOK.swap(0, Relaxed);
+    if hook != 0 {
+        unsafe {
+            let _ = UnhookWinEvent(HWINEVENTHOOK(hook as *mut _));
+        }
+    }
+}
+
+/// Follows the moves of the window in front, as it is now (call again when
+/// another comes to the front). The hook is only for that window's thread:
+/// a global one for location changes would wake the island on every cursor
+/// and caret move on the system. Not for the island's own windows.
+fn follow_front() {
+    use windows::Win32::System::Threading::GetCurrentProcessId;
+    use windows::Win32::UI::Accessibility::SetWinEventHook;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EVENT_OBJECT_LOCATIONCHANGE, GetForegroundWindow, WINEVENT_OUTOFCONTEXT,
+        WINEVENT_SKIPOWNPROCESS,
+    };
+    unhook_front();
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.is_invalid() {
+            return;
+        }
+        // The desktop and the taskbar don't move, and their threads are busy.
+        if is_shell_class(fg) {
+            return;
+        }
+        let mut pid = 0u32;
+        let tid = GetWindowThreadProcessId(fg, Some(&mut pid));
+        if tid == 0 || pid == GetCurrentProcessId() {
+            return;
+        }
+        let hook = SetWinEventHook(
+            EVENT_OBJECT_LOCATIONCHANGE,
+            EVENT_OBJECT_LOCATIONCHANGE,
+            None,
+            Some(front_moved),
+            pid,
+            tid,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        );
+        if !hook.is_invalid() {
+            FRONT_HOOK.store(hook.0 as isize, Relaxed);
+            FRONT.store(fg.0 as isize, Relaxed);
+        }
+    }
+}
+
+/// The desktop, the taskbar and the shell's edge-input windows: never a
+/// window an island makes way for.
+fn is_shell_class(h: HWND) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::GetClassNameW;
+    let mut buf = [0u16; 64];
+    let n = unsafe { GetClassNameW(h, &mut buf) }.max(0) as usize;
+    matches!(
+        String::from_utf16_lossy(&buf[..n]).as_str(),
+        "Progman"
+            | "WorkerW"
+            | "Shell_TrayWnd"
+            | "Shell_SecondaryTrayWnd"
+            | "EdgeUiInputTopWndClass"
+            | "EdgeUiInputWndClass"
+    )
 }
 
 /// A window is under an ordinary one if any of those above it (as
@@ -372,6 +567,135 @@ fn buried(hwnd: HWND) -> bool {
             )
         }),
     )
+}
+
+/// A window's rect as the user sees it (without the invisible borders
+/// Windows adds), in screen px.
+fn frame_bounds(hwnd: HWND) -> Option<Rect> {
+    use windows::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+    let mut r = RECT::default();
+    unsafe {
+        let dwm = DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            &mut r as *mut RECT as *mut _,
+            size_of::<RECT>() as u32,
+        );
+        if dwm.is_err() && GetWindowRect(hwnd, &mut r).is_err() {
+            return None;
+        }
+    }
+    Some(Rect {
+        x: r.left as f32,
+        y: r.top as f32,
+        width: (r.right - r.left) as f32,
+        height: (r.bottom - r.top) as f32,
+    })
+}
+
+/// The windows that count (see [`dodge::counts`]), topmost down, that touch
+/// the first rect of any pair in `reach` (screen px: the island with the
+/// clearance it keeps once dodging). It stops once each island has a window
+/// over the second rect of its pair (the one `dodge::decide` will use: with
+/// the clearance only if it is dodging already). In a QA run these are QA's
+/// own: the user's windows are never looked at.
+fn windows_over(reach: &[(Rect, Rect)]) -> Vec<Rect> {
+    #[cfg(feature = "qa")]
+    if qa::active() {
+        return qa::windows();
+    }
+    use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
+    use windows::Win32::System::Threading::GetCurrentProcessId;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GW_HWNDNEXT, GWL_EXSTYLE, GetLayeredWindowAttributes, GetTopWindow, GetWindow,
+        GetWindowLongPtrW, GetWindowRect, IsIconic, IsWindowVisible, LWA_ALPHA,
+    };
+    let mut out = Vec::new();
+    let mut decided = vec![false; reach.len()];
+    let own = unsafe { GetCurrentProcessId() };
+    let mut next = unsafe { GetTopWindow(None) }.ok();
+    // A cap, in case the list is endless (it changes as it is walked).
+    for _ in 0..512 {
+        let Some(h) = next else { break };
+        next = unsafe { GetWindow(h, GW_HWNDNEXT) }.ok();
+        // Cheapest first, leaving as soon as one says no.
+        let mut f = dodge::Flags {
+            visible: unsafe { IsWindowVisible(h) }.as_bool(),
+            ..Default::default()
+        };
+        if !dodge::counts(f) {
+            continue;
+        }
+        // The window's rect (a little bigger than what shows) tells whether
+        // it is near; its drawn frame is only taken for the ones that are.
+        let mut wr = RECT::default();
+        if unsafe { GetWindowRect(h, &mut wr) }.is_err() {
+            continue;
+        }
+        let wr = Rect {
+            x: wr.left as f32,
+            y: wr.top as f32,
+            width: (wr.right - wr.left) as f32,
+            height: (wr.bottom - wr.top) as f32,
+        };
+        if !reach.iter().any(|g| dodge::touches(g.0, wr)) {
+            continue;
+        }
+        f.minimized = unsafe { IsIconic(h) }.as_bool();
+        let ex = unsafe { GetWindowLongPtrW(h, GWL_EXSTYLE) } as u32;
+        f.tool = ex & WS_EX_TOOLWINDOW.0 != 0;
+        f.click_through = ex & WS_EX_TRANSPARENT.0 != 0;
+        // Fully transparent overlays are no window to make way for.
+        if ex & WS_EX_LAYERED.0 != 0 {
+            let (mut alpha, mut flags) = (255u8, Default::default());
+            if unsafe { GetLayeredWindowAttributes(h, None, Some(&mut alpha), Some(&mut flags)) }
+                .is_ok()
+                && flags & LWA_ALPHA != Default::default()
+                && alpha == 0
+            {
+                f.click_through = true;
+            }
+        }
+        if !dodge::counts(f) {
+            continue;
+        }
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+        f.own = pid == own;
+        let mut cloaked = 0u32;
+        f.cloaked = unsafe {
+            DwmGetWindowAttribute(
+                h,
+                DWMWA_CLOAKED,
+                &mut cloaked as *mut u32 as *mut _,
+                size_of::<u32>() as u32,
+            )
+        }
+        .is_ok()
+            && cloaked != 0;
+        if !dodge::counts(f) {
+            continue;
+        }
+        f.shell = is_shell_class(h);
+        if !dodge::counts(f) {
+            continue;
+        }
+        let Some(r) = frame_bounds(h) else { continue };
+        if !reach.iter().any(|g| dodge::touches(g.0, r)) {
+            continue;
+        }
+        out.push(r);
+        // Decided only by a window `decide` will take for it: one that
+        // touches the grown rect but not the resting one is skipped there.
+        for (d, g) in decided.iter_mut().zip(reach) {
+            *d |= dodge::touches(g.1, r);
+        }
+        if decided.iter().all(|d| *d) {
+            break;
+        }
+    }
+    out
 }
 
 const ISLAND_CLASS: PCWSTR = w!("IslandWindow");
@@ -486,6 +810,8 @@ const MENU_SIZE: u32 = 19;
 const MENU_RESET: u32 = 20;
 // The language, on the main page: the next one at each click.
 const MENU_LANGUAGE: u32 = 21;
+/// The closed island makes way for windows.
+const MENU_DODGE: u32 = 22;
 /// The screens' switches: this plus the screen's index in `App::screens`.
 const MENU_SCREEN: u32 = 100;
 const MENU_CLASS: PCWSTR = w!("IslandMenu");
@@ -637,6 +963,9 @@ struct Surface {
     /// size (the window's region would cut a shadow off). Only while the
     /// style is pill.
     shadow_hwnd: Option<HWND>,
+    /// A window's top edge is under the closed island: it is a small notch
+    /// (see `dodge`) until the pointer opens it or the window leaves.
+    dodging: bool,
 }
 
 impl Drop for Surface {
@@ -703,6 +1032,7 @@ impl Surface {
             full: false,
             muted: false,
             shadow_hwnd: None,
+            dodging: false,
         })
     }
 
@@ -888,6 +1218,24 @@ fn openness(sf: &Surface, sz: layout::Sizes, k: f32, peek_h: f32) -> f32 {
     ((sf.height.value - small) / (OPEN.1 - small)).clamp(0.0, 1.0)
 }
 
+/// How the front window stands to an island.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Hit {
+    Miss,
+    Touches,
+    Under,
+}
+
+/// How much of the closed content shows, while the island makes way for a
+/// window (or goes to): 1 otherwise, whatever its height.
+fn presence_of(sf: &Surface, closed_h: f32, k: f32) -> f32 {
+    if sf.dodging || sf.height.target < closed_h - 0.5 {
+        dodge::presence(sf.height.value, closed_h, dodge::NOTCH.1 * k)
+    } else {
+        1.0
+    }
+}
+
 /// How visible the closed, glance and open contents are, from the body's
 /// height: each one fades as the body leaves its size.
 fn alphas(sf: &Surface, sz: layout::Sizes, k: f32, peek_h: f32) -> [f32; 3] {
@@ -910,6 +1258,9 @@ fn alphas(sf: &Surface, sz: layout::Sizes, k: f32, peek_h: f32) -> [f32; 3] {
     // back only once it is nearly their size, not over a tall body.
     let pace = if sf.shrinking { 2.4 } else { 3.0 };
     let leaving = (1.0 - open * pace).clamp(0.0, 1.0);
+    // Making way for a window: the closed content fades as the body
+    // shrinks to its notch (1 at any other height).
+    let presence = presence_of(sf, closed_h, k);
     if sf.peek_view {
         // One gives way to the other halfway, so they never overlap. A
         // taller glance (a notification's) is fully there by the song's
@@ -923,9 +1274,9 @@ fn alphas(sf: &Surface, sz: layout::Sizes, k: f32, peek_h: f32) -> [f32; 3] {
         // closed one: at rest it is fully visible.
         let past = ((h - peek_h) / (OPEN.1 - peek_h)).clamp(0.0, 1.0);
         let leaving = (1.0 - past * pace).clamp(0.0, 1.0);
-        [closed, peek * leaving, open_a]
+        [closed * presence, peek * leaving, open_a]
     } else {
-        [leaving, 0.0, open_a]
+        [leaving * presence, 0.0, open_a]
     }
 }
 
@@ -1098,6 +1449,13 @@ struct App {
     /// A notification's glance shows over full-screen apps: the islands
     /// hidden there come out until it is gone.
     full_glance: bool,
+    /// Whether the front window's top edge was under each island, at the
+    /// last check: a move of that window that changes none is not looked
+    /// into any further.
+    front_hits: Vec<Hit>,
+    /// Each island's resting width at the last check, to know whether a
+    /// song changing it calls for another.
+    rest_w: Vec<f32>,
 }
 
 thread_local! {
@@ -1326,6 +1684,8 @@ impl App {
             self.surfaces[i].place(f, l.open_width, l.scale, l.sizes, room);
         }
         self.fit_text();
+        // Screens, DPI, placement, sizes and settings all pass through here.
+        self.windows_changed(true);
         self.retarget_all();
         for i in 0..self.surfaces.len() {
             if self.surfaces[i].last_frame.is_none() {
@@ -1358,6 +1718,7 @@ impl App {
             && self.timer.active(&self.settings.focus)
             && !self.surfaces[i].open
             && !self.toast_shown_at(i)
+            && !self.dodged(i)
     }
 
     /// Island `i`'s bubble's size in DIPs at its `islandScale`: wider with
@@ -1479,6 +1840,8 @@ impl App {
         let peek_u = self.peek_unscaled_at(i);
         let peek_h = peek_u.1 * k;
         let alpha = alphas(&self.surfaces[i], lk.sizes, k, peek_h);
+        let presence = presence_of(&self.surfaces[i], lk.sizes.closed.1 * k, k);
+        let dodged = self.dodged(i);
         let open_a = openness(&self.surfaces[i], lk.sizes, k, peek_h);
         let glance_on = self.glance();
         let scroll = self.lyric_scroll();
@@ -1514,6 +1877,13 @@ impl App {
             (sf.width.value.max(sf.width.target) * s).round(),
             (sf.height.value.max(sf.height.target) * s).round(),
         );
+        // A notch that floats (not against the screen's edge) keeps a region
+        // tall enough to put the pointer on, to bring the island back.
+        let rh = if dodged && !f.hangs() {
+            rh.max((DODGED_HOVER * s).round())
+        } else {
+            rh
+        };
         let inset = f.ear_room();
         let rb = f.body(sf.window.width, rw, rh, true);
         let pad = if settled { 0 } else { 1 };
@@ -1722,10 +2092,11 @@ impl App {
                 extent: shape::SHADOW_EXTENT * s,
                 drop: shape::SHADOW_DROP * s,
                 radius: shape::pill_radius(h, s).min(w / 2.0),
-                alpha: shape::SHADOW_ALPHA,
+                alpha: shape::SHADOW_ALPHA * presence,
             }),
             size: (sf.width.value.max(0.0), sf.height.value.max(0.0)),
             alpha,
+            presence,
             track: self.track.as_ref(),
             position_ms: self.track.as_ref().map_or(0, |t| t.position_now()),
             empty: self.texts.nothing_playing,
@@ -2245,6 +2616,136 @@ impl App {
         }
     }
 
+    /// Island `i` is a small notch to make way for a window (#160): not
+    /// while it is open or shows a passing glance (a notice, a level, a
+    /// notification, the song's peek). The lyrics' glance stays: it is
+    /// only a line of text, and it makes way too.
+    fn dodged(&self, i: usize) -> bool {
+        let sf = &self.surfaces[i];
+        let muted = self.notice.is_some() && sf.muted;
+        let passing = self.notice_at(i).is_some() || (self.peek && !muted);
+        self.settings.dodge_windows && sf.dodging && !sf.open && !passing
+    }
+
+    /// Where island `i`'s closed body rests, in screen px (no ears): never
+    /// the notch it may be now, or the decision would flap.
+    fn rest_rect(&self, i: usize) -> Rect {
+        let sf = &self.surfaces[i];
+        let l = self.look(i);
+        let (k, s) = (l.scale, sf.scale);
+        let w = if self.track.is_some() {
+            sf.closed_w
+        } else {
+            l.sizes.closed.0
+        };
+        let b = self.frame_at(i).body(
+            sf.window.width,
+            (w * k * s).round(),
+            (l.sizes.closed.1 * k * s).round(),
+            true,
+        );
+        Rect {
+            x: sf.window.x + b.x,
+            y: sf.window.y + b.y,
+            ..b
+        }
+    }
+
+    /// The window in front, in screen px (in QA, its own window).
+    fn front_rect(&self) -> Option<Rect> {
+        #[cfg(feature = "qa")]
+        if qa::active() {
+            return qa::windows().first().copied();
+        }
+        let front = FRONT.load(Relaxed);
+        (front != 0)
+            .then(|| frame_bounds(HWND(front as *mut _)))
+            .flatten()
+    }
+
+    /// The rect island `i` is decided against: its resting body, grown by
+    /// the clearance once it is dodging (as `dodge::decide` does).
+    fn decide_rect(&self, i: usize, rest: Rect) -> Rect {
+        let sf = &self.surfaces[i];
+        if sf.dodging {
+            dodge::grown(rest, dodge::STICK * sf.scale)
+        } else {
+            rest
+        }
+    }
+
+    /// For each island, how the front window stands to it.
+    fn front_under(&self, rests: &[Rect]) -> Vec<Hit> {
+        let front = self.front_rect();
+        rests
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let reach = self.decide_rect(i, *r);
+                match front {
+                    Some(f) if dodge::under(reach, f, dodge::BAND * self.surfaces[i].scale) => {
+                        Hit::Under
+                    }
+                    Some(f) if dodge::touches(reach, f) => Hit::Touches,
+                    _ => Hit::Miss,
+                }
+            })
+            .collect()
+    }
+
+    /// Whether any island's resting width is not what the last check saw.
+    fn rest_changed(&self) -> bool {
+        let n = self.surfaces.len();
+        self.rest_w.len() != n
+            || (0..n).any(|i| (self.rest_rect(i).width - self.rest_w[i]).abs() > 0.5)
+    }
+
+    /// Windows moved, came or went: each island makes way for the window
+    /// whose top edge is under it, or comes back (#160). `full`: look at
+    /// every window; not: only the front one moved, and nothing is looked
+    /// into unless that changes how it stands to an island.
+    fn windows_changed(&mut self, full: bool) {
+        let n = self.surfaces.len();
+        if !self.settings.dodge_windows {
+            self.front_hits.clear();
+            for i in 0..n {
+                if std::mem::take(&mut self.surfaces[i].dodging) {
+                    self.retarget_surface(i);
+                }
+            }
+            return;
+        }
+        let rests: Vec<Rect> = (0..n).map(|i| self.rest_rect(i)).collect();
+        self.rest_w = rests.iter().map(|r| r.width).collect();
+        if !full && self.front_hits.len() == n && self.front_under(&rests) == self.front_hits {
+            return;
+        }
+        let reach: Vec<(Rect, Rect)> = rests
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                (
+                    dodge::grown(*r, dodge::STICK * self.surfaces[i].scale),
+                    self.decide_rect(i, *r),
+                )
+            })
+            .collect();
+        let windows = windows_over(&reach);
+        let mut flipped = Vec::new();
+        for (i, rest) in rests.iter().enumerate() {
+            let sf = &mut self.surfaces[i];
+            let now = dodge::decide(sf.dodging, *rest, sf.scale, windows.iter().copied());
+            if now != sf.dodging {
+                sf.dodging = now;
+                flipped.push(i);
+            }
+        }
+        self.front_hits = self.front_under(&rests);
+        for i in flipped {
+            self.retarget_surface(i);
+        }
+    }
+
     /// A notification's glance over a full-screen app: an island hidden
     /// under it comes out for the glance, and goes on top again (a
     /// full-screen window may have gone over it), without taking the
@@ -2727,7 +3228,7 @@ impl App {
     /// Aims one island's springs at the size its view has now.
     fn retarget_surface(&mut self, i: usize) {
         {
-            let peeking = self.peeking(i);
+            let peeking = self.peeking(i) && !self.dodged(i);
             let sf = &mut self.surfaces[i];
             if peeking && !sf.open {
                 sf.peek_view = true;
@@ -2738,6 +3239,7 @@ impl App {
         let k = l.scale;
         let peeking = self.peeking(i);
         let track_some = self.track.is_some();
+        let dodged = self.dodged(i);
         let bubble_to = if self.bubble_on(i) {
             activity::BUBBLE_GAP + self.bubble_dips(i).0
         } else {
@@ -2750,6 +3252,10 @@ impl App {
         let sf = &mut self.surfaces[i];
         let (w, h) = if sf.open {
             sf.open_size()
+        } else if dodged {
+            // A window's top edge is under the island: a small notch, also
+            // over the lyrics' glance (passing glances are never dodged).
+            (dodge::NOTCH.0 * k, dodge::NOTCH.1 * k)
         } else if peeking {
             peek_size
         } else if track_some {
@@ -2991,6 +3497,8 @@ impl App {
         }
         self.banners_follow();
         self.lyrics_column = s.open_lyrics;
+        // Never in QA: it must not look at the user's windows.
+        follow_windows(s.dodge_windows && !qa_mode());
         self.layout();
     }
 
@@ -3110,7 +3618,12 @@ impl App {
             }
         }
         self.ask_lyrics();
-        // Music starting or stopping widens or narrows the closed island.
+        // Music starting or stopping widens or narrows the closed island,
+        // and so the part of a window that is under it.
+        self.fit_text();
+        if self.rest_changed() {
+            self.windows_changed(true);
+        }
         self.retarget_all();
         for i in 0..self.surfaces.len() {
             if self.surfaces[i].last_frame.is_none() {
@@ -3193,12 +3706,29 @@ impl App {
                 }
             }
             WM_APP_NOTIFICATION => self.notified(),
-            WM_APP_ZORDER => self.foreground_changed(),
+            WM_APP_ZORDER => {
+                self.foreground_changed();
+                if self.settings.dodge_windows {
+                    follow_front();
+                    self.windows_changed(true);
+                }
+            }
+            WM_APP_WINDOWS => {
+                if wp.0 != 0 {
+                    WINDOWS_PENDING.store(false, Relaxed);
+                } else {
+                    FRONT_PENDING.store(false, Relaxed);
+                }
+                self.windows_changed(wp.0 != 0);
+            }
             WM_TIMER if wp.0 == ZORDER_TIMER => {
                 unsafe {
                     let _ = KillTimer(Some(self.anchor), ZORDER_TIMER);
                 }
                 self.keep_on_top();
+                // A window that finished placing itself before the hooks
+                // were on it.
+                self.windows_changed(true);
             }
             WM_APP_SPEAKERS => self.speakers_changed(),
             // A move over it comes as a few changes: one read once they end.
@@ -3723,6 +4253,10 @@ impl App {
                     },
                     self.settings.notification_glance,
                 ),
+            ),
+            (
+                MENU_DODGE,
+                row(toggle, t.dodge_windows, self.settings.dodge_windows, true),
             ),
             (
                 MENU_LANGUAGE,
@@ -4333,6 +4867,7 @@ impl App {
         let (key, on) = match id {
             MENU_LYRICS => ("lyrics", &mut file.lyrics),
             MENU_OPEN_LYRICS => ("openLyrics", &mut file.open_lyrics),
+            MENU_DODGE => ("dodgeWindows", &mut file.dodge_windows),
             // Windows' banners off app by app (as the switch in its
             // settings), or back on: kept as is until chosen again.
             MENU_ONLY_ISLAND => {
@@ -4482,13 +5017,17 @@ impl App {
         // From what is in use; the command line no longer holds it.
         *on = !match id {
             MENU_LYRICS => std::mem::take(&mut self.args.lyrics) | self.settings.lyrics,
+            MENU_DODGE => self.settings.dodge_windows,
             _ => self
                 .args
                 .open_lyrics
                 .take()
                 .unwrap_or(self.settings.open_lyrics),
         };
-        let _ = settings_file::set(key, Value::Bool(*on));
+        // QA never writes the user's settings.
+        if !qa_mode() {
+            let _ = settings_file::set(key, Value::Bool(*on));
+        }
         self.apply(file);
     }
 }
@@ -4885,6 +5424,8 @@ fn main() -> Result<()> {
             notifications: None,
             pulse: None,
             full_glance: false,
+            front_hits: Vec::new(),
+            rest_w: Vec::new(),
             // The banners are the user's: QA leaves them as they are.
             banners_quiet: !qa_mode() && banners::active(),
             banners_off: qa_mode().then_some(false),

@@ -109,6 +109,10 @@ pub struct Scene<'a> {
     pub size: (f32, f32),
     /// How visible the closed, glance and open contents are (0 to 1).
     pub alpha: [f32; 3],
+    /// How much of the closed island shows while it shrinks to a notch to
+    /// make way for a window (`dodge::presence`): 1 otherwise. It also
+    /// fades the cover's glow and the pill's shadow.
+    pub presence: f32,
     pub track: Option<&'a Track>,
     pub position_ms: u64,
     pub empty: &'a str,
@@ -2389,7 +2393,7 @@ impl Renderer {
                 // its ring; the cover's gives way as it comes in.
                 let shown = toast.map_or(0.0, |(_, _, a, _)| a);
                 if let Some(accent) = self.accent {
-                    self.glow(&geo, s.body.height, accent, 1.0 - shown)?;
+                    self.glow(&geo, s.body.height, accent, (1.0 - shown) * s.presence)?;
                     // Open, the color also spreads from behind the cover.
                     let open = s.alpha[2] * (1.0 - shown);
                     if open > 0.0 && s.track.is_some() {

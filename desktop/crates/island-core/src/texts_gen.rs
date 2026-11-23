@@ -49,6 +49,8 @@ pub struct Texts {
     pub active_screen: &'static str,
     /// Where a notification goes over a full-screen app, and its values.
     pub in_full_screen: &'static str,
+    /// The closed island shrinks to a notch while a window's top is under it.
+    pub dodge_windows: &'static str,
     pub fs_here: &'static str,
     pub fs_other: &'static str,
     pub fs_hide: &'static str,
@@ -147,6 +149,7 @@ pub const EN: Texts = Texts {
     all_screens: "All screens",
     active_screen: "Active screen",
     in_full_screen: "In full screen",
+    dodge_windows: "Make way for windows",
     fs_here: "Show here",
     fs_other: "Other screen",
     fs_hide: "Don't show",
@@ -228,6 +231,7 @@ pub const ES: Texts = Texts {
     all_screens: "Todas",
     active_screen: "La activa",
     in_full_screen: "En pantalla completa",
+    dodge_windows: "Apartarse de las ventanas",
     fs_here: "Aquí",
     fs_other: "Otra pantalla",
     fs_hide: "No mostrar",
@@ -309,6 +313,7 @@ pub const PT: Texts = Texts {
     all_screens: "Todas",
     active_screen: "A ativa",
     in_full_screen: "Em tela cheia",
+    dodge_windows: "Dar espaço às janelas",
     fs_here: "Aqui",
     fs_other: "Outra tela",
     fs_hide: "Não mostrar",
@@ -356,7 +361,7 @@ pub const PT: Texts = Texts {
 };
 
 /// Every text of `t`, in the order of the struct.
-pub fn all(t: &Texts) -> [&'static str; 78] {
+pub fn all(t: &Texts) -> [&'static str; 79] {
     [
         t.long_break,
         t.open_lyrics,
@@ -392,6 +397,7 @@ pub fn all(t: &Texts) -> [&'static str; 78] {
         t.all_screens,
         t.active_screen,
         t.in_full_screen,
+        t.dodge_windows,
         t.fs_here,
         t.fs_other,
         t.fs_hide,

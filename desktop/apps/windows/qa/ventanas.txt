@@ -1,0 +1,122 @@
+# QA de «apartarse de las ventanas» (#160): island.exe --qa qa/ventanas.txt --qa-out <carpeta>
+# La ventana de prueba es de la QA: nunca se toca una del usuario.
+slow 3
+set islandStyle "notch"
+set placement "top"
+wait-rest
+track "Canción" "Artista"
+wait 4000
+wait-rest
+expect-dodged 0 0
+background
+grab ventanas-libre
+idle 1000
+
+# Una ventana con el borde de arriba bajo la isla: queda la muesca.
+# El fondo se toma con la ventana ya puesta y el ajuste apagado, para que
+# la ventana de prueba no cuente como dibujo de la isla.
+set dodgeWindows false
+window 0
+wait-rest
+expect-dodged 0 0
+background
+film ventanas-apartar 80
+set dodgeWindows true
+wait-rest
+expect-dodged 0 1
+background
+grab ventanas-apartada
+idle 1500
+
+# Vistazos y la isla abierta salen encima igual, y vuelve a la muesca.
+toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
+wait-rest
+grab ventanas-toast
+wait 6000
+wait-rest
+level 0.4
+wait-rest
+wait 2500
+wait-rest
+film ventanas-abrir 80
+open 0
+wait-rest
+grab ventanas-abierta
+film ventanas-cerrar 80
+close 0
+wait-rest
+expect-dodged 0 1
+
+# La burbuja del foco no sale mientras está apartada.
+focus start
+wait-rest
+grab ventanas-foco
+focus reset
+wait-rest
+
+# Histéresis: un poco más abajo sigue apartada; lejos, vuelve; y otra vez.
+window-move 0 4
+wait-rest
+expect-dodged 0 1
+window-move 0 300
+wait-rest
+expect-dodged 0 0
+window-move 0 -304
+wait-rest
+expect-dodged 0 1
+
+# El ajuste apagado y encendido.
+set dodgeWindows false
+wait-rest
+expect-dodged 0 0
+set dodgeWindows true
+wait-rest
+expect-dodged 0 1
+idle 1000
+
+# Píldora, flotante, esquinas y otra escala (la sombra sigue a la muesca).
+# Solo la letra sincronizada (no pasa: es una línea de texto): sigue apartada.
+lyrics 1
+wait-rest
+expect-dodged 0 1
+lyrics 0
+wait-rest
+expect-dodged 0 1
+
+set islandStyle "pill"
+wait-rest
+background
+grab ventanas-pildora
+set placement "floating"
+wait-rest
+expect-dodged 0 1
+background
+grab ventanas-flotante
+set placement "top-left"
+wait-rest
+expect-dodged 0 0
+set placement "top"
+set islandStyle "notch"
+scale 1.5
+wait-rest
+expect-dodged 0 1
+background
+grab ventanas-escala
+
+# Dos pantallas: solo se aparta la que tiene la ventana debajo.
+# Las islas se renumeran: la ventana se vuelve a poner bajo la isla 0.
+fake-monitor
+set monitor "all"
+wait-rest
+window-close
+window 0
+wait-rest
+expect-dodged 0 1
+expect-dodged 1 0
+monitors
+
+window-close
+wait-rest
+expect-dodged 0 0
+idle 1000
+quit

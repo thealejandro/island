@@ -43,6 +43,14 @@
 //!   what each changes), never written to the real file. `menu-language`: the
 //!   language row, one step to the next language (auto, Español, English,
 //!   Português), also never written.
+//! - `window [i] [dx dy w h]`: the QA's own window (never one of the user's),
+//!   with its top at island `i`'s screen top and over its resting body plus
+//!   200 DIPs each side, 300 tall; `dx dy w h` (DIPs) move and size it.
+//!   `window-move <dx> <dy>` moves it, as the front window moving; and
+//!   `window-close` takes it away. `expect-dodged <i> <0|1>`: island `i` is
+//!   (1) or is not (0) making way for it, at the notch's height when it is.
+//!   In QA the user's windows are never looked at, moved or resized.
+//! - `lyrics <0|1>`: a made-up synced-lyrics glance on or off (no lookup).
 //! - `quit`.
 
 use super::*;
@@ -60,7 +68,8 @@ use windows::Win32::Graphics::Imaging::{
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowRect, SW_HIDE, SW_SHOWNOACTIVATE, ShowWindow,
+    GetWindowRect, HWND_TOP, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, ShowWindow,
+    WS_BORDER,
 };
 use windows::core::GUID;
 
@@ -143,7 +152,7 @@ pub fn from_args(args: &[String]) -> std::io::Result<bool> {
     let mut trace = std::io::BufWriter::new(std::fs::File::create(out.join("trace.csv"))?);
     writeln!(
         trace,
-        "t_ms,island,scale,win_x,win_y,win_w,win_h,w,w_target,w_vel,h,h_target,h_vel,body_x,body_w,body_h,a_closed,a_peek,a_open,openness,open,peek_view,shrinking"
+        "t_ms,island,scale,win_x,win_y,win_w,win_h,w,w_target,w_vel,h,h_target,h_vel,body_x,body_w,body_h,a_closed,a_peek,a_open,openness,open,peek_view,shrinking,dodging"
     )?;
     let mut json = serde_json::Map::new();
     // Nothing that watches the system: the script makes up what shows.
@@ -362,7 +371,7 @@ pub fn frame(app: &App, i: usize) {
         let w = sf.window;
         let _ = writeln!(
             q.trace,
-            "{t:.1},{i},{s},{},{},{},{},{:.2},{:.2},{:.3},{:.2},{:.2},{:.3},{:.2},{:.2},{:.2},{:.3},{:.3},{:.3},{o:.3},{},{},{}",
+            "{t:.1},{i},{s},{},{},{},{},{:.2},{:.2},{:.3},{:.2},{:.2},{:.3},{:.2},{:.2},{:.2},{:.3},{:.3},{:.3},{o:.3},{},{},{},{}",
             w.x,
             w.y,
             w.width,
@@ -382,6 +391,7 @@ pub fn frame(app: &App, i: usize) {
             sf.open as u8,
             sf.peek_view as u8,
             sf.shrinking as u8,
+            sf.dodging as u8,
         );
         // 1: the bubble too, while it is out.
         if let Some(b) = bubble_now(app, i, body)
@@ -918,7 +928,7 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
             for (i, sf) in app.surfaces.iter().enumerate() {
                 let (r, w) = (sf.monitor.rect, sf.monitor.work);
                 note(&format!(
-                    "isla {i}: id «{}», pantalla {}x{} en ({}, {}), trabajo {}x{} en ({}, {}), ventana en ({}, {}), alto {:.0}{}{}, aspecto {} {} x{}{}",
+                    "isla {i}: id «{}», pantalla {}x{} en ({}, {}), trabajo {}x{} en ({}, {}), ventana en ({}, {}), alto {:.0}{}{}{}, aspecto {} {} x{}{}",
                     sf.id,
                     r.width,
                     r.height,
@@ -933,6 +943,7 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
                     sf.height.target,
                     if sf.muted { ", muda" } else { "" },
                     if sf.full { ", pantalla completa" } else { "" },
+                    if sf.dodging { ", apartada" } else { "" },
                     sf.look.placement.name(),
                     sf.look.form.name(),
                     sf.look.scale,
@@ -943,6 +954,132 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
                     }
                 ));
             }
+        }
+        // The QA's own window, for an island to make way for.
+        "window" => {
+            let i = arg_f(cmd, 1).unwrap_or(0.0) as usize;
+            if i >= app.surfaces.len() {
+                return Err(format!("«window»: no hay isla {i}"));
+            }
+            let s = app.surfaces[i].scale;
+            let rest = app.rest_rect(i);
+            let d = |n: usize| arg_f(cmd, n).unwrap_or(0.0) * s;
+            let x = (rest.x - 200.0 * s + d(2)).round() as i32;
+            let y = (app.surfaces[i].monitor.rect.y + d(3)).round() as i32;
+            let w = if cmd.len() > 4 {
+                d(4)
+            } else {
+                rest.width + 400.0 * s
+            }
+            .round() as i32;
+            let h = if cmd.len() > 5 { d(5) } else { 300.0 * s }.round() as i32;
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                    w!("STATIC"),
+                    w!("Island QA"),
+                    WS_POPUP | WS_BORDER,
+                    x,
+                    y,
+                    w,
+                    h,
+                    None,
+                    None,
+                    GetModuleHandleW(None).ok().map(|h| h.into()),
+                    None,
+                )
+            }
+            .map_err(|e| format!("«window»: {e}"))?;
+            unsafe {
+                let _ = SetWindowPos(hwnd, Some(HWND_TOP), x, y, w, h, SWP_NOACTIVATE);
+                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            }
+            WINS.with_borrow_mut(|v| v.push(hwnd));
+            app.windows_changed(true);
+        }
+        // The QA's window moves, as the front window does.
+        "window-move" => {
+            let (dx, dy) = (arg_f(cmd, 1)?, arg_f(cmd, 2)?);
+            WINS.with_borrow(|v| {
+                for h in v {
+                    let mut r = RECT::default();
+                    unsafe {
+                        if GetWindowRect(*h, &mut r).is_ok() {
+                            // In DIPs of the screen the window is on.
+                            let (x, y) = (r.left as f32, r.top as f32);
+                            let s = app
+                                .surfaces
+                                .iter()
+                                .find(|sf| {
+                                    let m = sf.monitor.rect;
+                                    x >= m.x && x < m.x + m.width && y >= m.y && y < m.y + m.height
+                                })
+                                .or(app.surfaces.first())
+                                .map_or(1.0, |sf| sf.scale);
+                            let _ = SetWindowPos(
+                                *h,
+                                None,
+                                r.left + (dx * s).round() as i32,
+                                r.top + (dy * s).round() as i32,
+                                0,
+                                0,
+                                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                            );
+                        }
+                    }
+                }
+            });
+            app.windows_changed(false);
+        }
+        "window-close" => {
+            close_windows();
+            app.windows_changed(true);
+        }
+        "expect-dodged" => {
+            let i = arg_f(cmd, 1)? as usize;
+            let want = arg_f(cmd, 2)? != 0.0;
+            if i >= app.surfaces.len() {
+                return Err(format!("«expect-dodged»: no hay isla {i}"));
+            }
+            let sf = &app.surfaces[i];
+            let k = app.look(i).scale;
+            let got = sf.dodging;
+            let mut bad = None;
+            if got != want {
+                bad = Some(format!("8 isla {i}: apartada {got}, se esperaba {want}"));
+            } else if !want && app.dodged(i) {
+                bad = Some(format!("8 isla {i}: no apartada pero actúa como apartada"));
+            } else if want && app.dodged(i) && (sf.height.target - dodge::NOTCH.1 * k).abs() > 0.5 {
+                bad = Some(format!(
+                    "8 isla {i}: apartada con alto {:.1}, la muesca es {:.1}",
+                    sf.height.target,
+                    dodge::NOTCH.1 * k
+                ));
+            }
+            if let Some(b) = bad {
+                QA.with_borrow_mut(|q| q.as_mut().map(|q| q.fail(b)));
+            }
+        }
+        // A synced-lyrics glance, made up: the worker never gets a query,
+        // so nothing goes to the network.
+        "lyrics" => {
+            if arg_f(cmd, 1)? != 0.0 {
+                if app.lyrics.is_none() {
+                    app.lyrics = Some(lyrics::Lyrics::start(app.anchor, WM_APP_LYRICS));
+                }
+                app.lines = ["Una línea de la letra", "Y otra después"]
+                    .iter()
+                    .enumerate()
+                    .map(|(n, t)| island_core::lyrics::Line {
+                        t: n as u64 * 5000,
+                        text: (*t).into(),
+                    })
+                    .collect();
+            } else {
+                app.lyrics = None;
+                app.lines.clear();
+            }
+            app.layout();
         }
         "quit" => {
             QA.with_borrow_mut(|q| q.as_mut().map(|q| q.next = q.cmds.len()));
@@ -971,6 +1108,36 @@ thread_local! {
     static FAKE: RefCell<Vec<(Monitor, String)>> = const { RefCell::new(Vec::new()) };
     /// The island `active` says is on the screen being looked at.
     static SCREEN: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    /// The windows `window` made: the only ones an island makes way for.
+    static WINS: RefCell<Vec<HWND>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The QA's own windows, front first, in screen px: what the islands see
+/// of the desktop while a script runs.
+pub fn windows() -> Vec<Rect> {
+    WINS.with_borrow(|v| {
+        v.iter()
+            .rev()
+            .filter_map(|h| {
+                let mut r = RECT::default();
+                unsafe { GetWindowRect(*h, &mut r) }.ok()?;
+                Some(Rect {
+                    x: r.left as f32,
+                    y: r.top as f32,
+                    width: (r.right - r.left) as f32,
+                    height: (r.bottom - r.top) as f32,
+                })
+            })
+            .collect()
+    })
+}
+
+fn close_windows() {
+    for h in WINS.take() {
+        unsafe {
+            let _ = DestroyWindow(h);
+        }
+    }
 }
 
 /// The island set by `active`, in place of the real active screen.
@@ -1226,6 +1393,7 @@ fn save_png(g: &Grab, path: &std::path::Path) -> windows::core::Result<()> {
 
 /// The script is over: the report, and the app ends.
 fn finish(app: &mut App) {
+    close_windows();
     unsafe {
         let _ = KillTimer(Some(app.anchor), TIMER);
     }
