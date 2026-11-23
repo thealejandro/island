@@ -39,3 +39,33 @@ previous target immediately. No database or agenda migrations are involved.
 New settings are additive, unknown keys remain and missing keys default.
 
 Publishing to main is separate and requires the user's confirmation.
+
+## Golden vectors shared with the desktop core
+
+`island-core` (Rust, `desktop/`) and the plugin's models (`LyricsModel.js`,
+`FocusModel.js`, `MediaModel.js`, `IcsModel.js`, `IslandSettings.js`) hold the
+same rules twice. `test/vectors/*.json` keeps them from drifting: arrays of
+`{"fn", "args", "expect"}` cases that the core generates from its real
+functions (lyrics, focus, media, ics, settings).
+
+- `desktop/crates/island-core/tests/vectors.rs` fails when a stored file
+  differs from what the core produces now. CI runs it on Linux
+  (`cargo test -p island-core`).
+- `test/vectors.test.mjs` runs the same cases through the JS models. `fn` is
+  a neutral name; the mapping to each JS function is in that file.
+- A case with `"skip": {"js": "reason"}` is a known difference between the
+  two sides. It is not run in JS, and every one is written down in the
+  case itself. Fix the difference (then remove the `skip`) or keep the
+  reason honest.
+
+To change a rule: edit the core and the JS, add or change cases in
+`vectors.rs`, then regenerate and review the diff of `test/vectors/`:
+
+```bash
+cd desktop
+ISLAND_BLESS=1 cargo test -p island-core --test vectors
+cd .. && node --test 'test/*.test.mjs'
+```
+
+Floats are stored with 6 decimals and compared with that tolerance in JS.
+The files are LF (`.gitattributes`). All text in the cases is made up.

@@ -1,0 +1,387 @@
+[
+  {
+    "fn": "normalize_shared",
+    "args": [
+      {}
+    ],
+    "expect": {
+      "language": "",
+      "defaultPage": "home",
+      "lyrics": false,
+      "openLyrics": true,
+      "textAlign": "center",
+      "songText": "title-artist",
+      "focusMinutes": 25,
+      "breakMinutes": 5,
+      "longBreakMinutes": 15,
+      "longBreakEvery": 4,
+      "reminderLead": 10
+    }
+  },
+  {
+    "fn": "normalize_shared",
+    "args": [
+      {
+        "language": "es",
+        "defaultPage": "focus",
+        "lyrics": true,
+        "openLyrics": false,
+        "textAlign": "left",
+        "songText": "artist-title",
+        "focusMinutes": 50,
+        "breakMinutes": 10,
+        "longBreakMinutes": 30,
+        "longBreakEvery": 3,
+        "reminderLead": 15
+      }
+    ],
+    "expect": {
+      "language": "es",
+      "defaultPage": "focus",
+      "lyrics": true,
+      "openLyrics": false,
+      "textAlign": "left",
+      "songText": "artist-title",
+      "focusMinutes": 50,
+      "breakMinutes": 10,
+      "longBreakMinutes": 30,
+      "longBreakEvery": 3,
+      "reminderLead": 15
+    }
+  },
+  {
+    "fn": "normalize_shared",
+    "args": [
+      {
+        "language": "en"
+      }
+    ],
+    "expect": {
+      "language": "en",
+      "defaultPage": "home",
+      "lyrics": false,
+      "openLyrics": true,
+      "textAlign": "center",
+      "songText": "title-artist",
+      "focusMinutes": 25,
+      "breakMinutes": 5,
+      "longBreakMinutes": 15,
+      "longBreakEvery": 4,
+      "reminderLead": 10
+    }
+  },
+  {
+    "fn": "normalize_shared",
+    "args": [
+      {
+        "language": "fr",
+        "defaultPage": "nope",
+        "textAlign": "right",
+        "songText": "x"
+      }
+    ],
+    "expect": {
+      "language": "",
+      "defaultPage": "home",
+      "lyrics": false,
+      "openLyrics": true,
+      "textAlign": "center",
+      "songText": "title-artist",
+      "focusMinutes": 25,
+      "breakMinutes": 5,
+      "longBreakMinutes": 15,
+      "longBreakEvery": 4,
+      "reminderLead": 10
+    }
+  },
+  {
+    "fn": "normalize_shared",
+    "args": [
+      {
+        "lyrics": "yes",
+        "openLyrics": 0,
+        "focusMinutes": [],
+        "breakMinutes": null
+      }
+    ],
+    "expect": {
+      "language": "",
+      "defaultPage": "home",
+      "lyrics": false,
+      "openLyrics": true,
+      "textAlign": "center",
+      "songText": "title-artist",
+      "focusMinutes": 25,
+      "breakMinutes": 5,
+      "longBreakMinutes": 15,
+      "longBreakEvery": 4,
+      "reminderLead": 10
+    }
+  },
+  {
+    "fn": "normalize_shared",
+    "args": [
+      {
+        "focusMinutes": 7,
+        "breakMinutes": 1,
+        "longBreakMinutes": 5,
+        "longBreakEvery": 2
+      }
+    ],
+    "expect": {
+      "language": "",
+      "defaultPage": "home",
+      "lyrics": false,
+      "openLyrics": true,
+      "textAlign": "center",
+      "songText": "title-artist",
+      "focusMinutes": 7,
+      "breakMinutes": 1,
+      "longBreakMinutes": 5,
+      "longBreakEvery": 2,
+      "reminderLead": 10
+    }
+  },
+  {
+    "fn": "normalize_shared",
+    "args": [
+      {
+        "focusMinutes": 120,
+        "breakMinutes": 30,
+        "longBreakMinutes": 60,
+        "longBreakEvery": 8,
+        "reminderLead": 120
+      }
+    ],
+    "expect": {
+      "language": "",
+      "defaultPage": "home",
+      "lyrics": false,
+      "openLyrics": true,
+      "textAlign": "center",
+      "songText": "title-artist",
+      "focusMinutes": 120,
+      "breakMinutes": 30,
+      "longBreakMinutes": 60,
+      "longBreakEvery": 8,
+      "reminderLead": 120
+    }
+  },
+  {
+    "fn": "normalize_shared",
+    "args": [
+      {
+        "reminderLead": 0
+      }
+    ],
+    "expect": {
+      "language": "",
+      "defaultPage": "home",
+      "lyrics": false,
+      "openLyrics": true,
+      "textAlign": "center",
+      "songText": "title-artist",
+      "focusMinutes": 25,
+      "breakMinutes": 5,
+      "longBreakMinutes": 15,
+      "longBreakEvery": 4,
+      "reminderLead": 0
+    }
+  },
+  {
+    "fn": "normalize_shared",
+    "args": [
+      {
+        "ghost": 1,
+        "lyrics": true
+      }
+    ],
+    "expect": {
+      "language": "",
+      "defaultPage": "home",
+      "lyrics": true,
+      "openLyrics": true,
+      "textAlign": "center",
+      "songText": "title-artist",
+      "focusMinutes": 25,
+      "breakMinutes": 5,
+      "longBreakMinutes": 15,
+      "longBreakEvery": 4,
+      "reminderLead": 10
+    }
+  },
+  {
+    "fn": "normalize_shared",
+    "args": [
+      {
+        "language": "pt"
+      }
+    ],
+    "expect": {
+      "language": "",
+      "defaultPage": "home",
+      "lyrics": false,
+      "openLyrics": true,
+      "textAlign": "center",
+      "songText": "title-artist",
+      "focusMinutes": 25,
+      "breakMinutes": 5,
+      "longBreakMinutes": 15,
+      "longBreakEvery": 4,
+      "reminderLead": 10
+    },
+    "skip": {
+      "js": "the plugin has Portuguese; the core gets it with the shared texts (phase 2 of #80)"
+    }
+  },
+  {
+    "fn": "normalize_shared",
+    "args": [
+      {
+        "defaultPage": "calendar"
+      }
+    ],
+    "expect": {
+      "language": "",
+      "defaultPage": "home",
+      "lyrics": false,
+      "openLyrics": true,
+      "textAlign": "center",
+      "songText": "title-artist",
+      "focusMinutes": 25,
+      "breakMinutes": 5,
+      "longBreakMinutes": 15,
+      "longBreakEvery": 4,
+      "reminderLead": 10
+    },
+    "skip": {
+      "js": "the plugin has the calendar and world pages; the core only home and focus"
+    }
+  },
+  {
+    "fn": "normalize_shared",
+    "args": [
+      {
+        "defaultPage": "world"
+      }
+    ],
+    "expect": {
+      "language": "",
+      "defaultPage": "home",
+      "lyrics": false,
+      "openLyrics": true,
+      "textAlign": "center",
+      "songText": "title-artist",
+      "focusMinutes": 25,
+      "breakMinutes": 5,
+      "longBreakMinutes": 15,
+      "longBreakEvery": 4,
+      "reminderLead": 10
+    },
+    "skip": {
+      "js": "the plugin has the calendar and world pages; the core only home and focus"
+    }
+  },
+  {
+    "fn": "normalize_shared",
+    "args": [
+      {
+        "focusMinutes": 500,
+        "breakMinutes": 0,
+        "longBreakMinutes": 1,
+        "longBreakEvery": 99,
+        "reminderLead": 999
+      }
+    ],
+    "expect": {
+      "language": "",
+      "defaultPage": "home",
+      "lyrics": false,
+      "openLyrics": true,
+      "textAlign": "center",
+      "songText": "title-artist",
+      "focusMinutes": 25,
+      "breakMinutes": 5,
+      "longBreakMinutes": 15,
+      "longBreakEvery": 4,
+      "reminderLead": 10
+    },
+    "skip": {
+      "js": "a number out of range is clamped by the plugin and falls back to its default in the core"
+    }
+  },
+  {
+    "fn": "normalize_shared",
+    "args": [
+      {
+        "focusMinutes": -5
+      }
+    ],
+    "expect": {
+      "language": "",
+      "defaultPage": "home",
+      "lyrics": false,
+      "openLyrics": true,
+      "textAlign": "center",
+      "songText": "title-artist",
+      "focusMinutes": 25,
+      "breakMinutes": 5,
+      "longBreakMinutes": 15,
+      "longBreakEvery": 4,
+      "reminderLead": 10
+    },
+    "skip": {
+      "js": "a number out of range is clamped by the plugin and falls back to its default in the core"
+    }
+  },
+  {
+    "fn": "normalize_shared",
+    "args": [
+      {
+        "lyrics": "true",
+        "openLyrics": "false"
+      }
+    ],
+    "expect": {
+      "language": "",
+      "defaultPage": "home",
+      "lyrics": false,
+      "openLyrics": true,
+      "textAlign": "center",
+      "songText": "title-artist",
+      "focusMinutes": 25,
+      "breakMinutes": 5,
+      "longBreakMinutes": 15,
+      "longBreakEvery": 4,
+      "reminderLead": 10
+    },
+    "skip": {
+      "js": "the plugin reads \"true\"/\"false\" text as booleans; the core only real booleans"
+    }
+  },
+  {
+    "fn": "normalize_shared",
+    "args": [
+      {
+        "focusMinutes": "40",
+        "breakMinutes": 3.7
+      }
+    ],
+    "expect": {
+      "language": "",
+      "defaultPage": "home",
+      "lyrics": false,
+      "openLyrics": true,
+      "textAlign": "center",
+      "songText": "title-artist",
+      "focusMinutes": 25,
+      "breakMinutes": 5,
+      "longBreakMinutes": 15,
+      "longBreakEvery": 4,
+      "reminderLead": 10
+    },
+    "skip": {
+      "js": "the plugin reads numbers in text and cuts decimals (parseInt); the core only whole numbers"
+    }
+  }
+]

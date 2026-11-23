@@ -18,6 +18,21 @@ jobs:
           node-version: 22
       - run: node --test 'test/*.test.mjs'
 
+  # The core's golden vectors (test/vectors/*.json) and the rest of its tests,
+  # on Linux too: island-core has no OS dependencies.
+  core:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+      - run: cargo test -p island-core --locked
+
   qml:
     runs-on: windows-latest
     steps:
