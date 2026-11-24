@@ -10,9 +10,16 @@ project follows [Semantic Versioning](https://semver.org/).
 
 - Windows: the closed island makes way for windows. While a window's top
   edge is under it (a maximized or snapped window's title bar and tabs), it
-  shrinks to a small notch, and comes back when the window moves away. The
+  makes way, and comes back when the window moves away. The
   `dodgeWindows` setting and the tray menu's "Make way for windows" turn it
   off. It follows window events: nothing runs at rest. (#160)
+- Windows: choose how the island looks while it makes way for a window, with
+  `dodgeStyle` or the tray menu: `mini` (the default: a small island with a
+  thin rim, and a dot while music plays), `compact` (a thin island with the
+  song, the focus timer or the time), `faded` (keeps its size, at the
+  opacity `dodgeOpacity` sets, opaque again under the pointer) or `line`
+  (the thin line of 0.1.18). Only the compact one without music ticks, once
+  a minute.
 - Omarchy: a scrolling column of synced lyrics beside the player, with
   pauses and surrounding lines. The agenda moves below it; narrow islands
   retain inline lyrics. `openLyrics` controls the open view independently

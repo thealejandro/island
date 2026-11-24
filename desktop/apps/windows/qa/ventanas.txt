@@ -12,7 +12,7 @@ background
 grab ventanas-libre
 idle 1000
 
-# Una ventana con el borde de arriba bajo la isla: queda la muesca.
+# Una ventana con el borde de arriba bajo la isla: queda la isla mini (el estilo por defecto).
 # El fondo se toma con la ventana ya puesta y el ajuste apagado, para que
 # la ventana de prueba no cuente como dibujo de la isla.
 set dodgeWindows false
@@ -28,7 +28,7 @@ background
 grab ventanas-apartada
 idle 1500
 
-# Vistazos y la isla abierta salen encima igual, y vuelve a la muesca.
+# Vistazos y la isla abierta salen encima igual, y vuelve a la mini.
 toast "Mensajes" "Ana" "¿Nos vemos a las 6?"
 wait-rest
 grab ventanas-toast
@@ -74,7 +74,7 @@ wait-rest
 expect-dodged 0 1
 idle 1000
 
-# Píldora, flotante, esquinas y otra escala (la sombra sigue a la muesca).
+# Píldora, flotante, esquinas y otra escala (la sombra sigue a la mini).
 # Solo la letra sincronizada (no pasa: es una línea de texto): sigue apartada.
 lyrics 1
 wait-rest
@@ -102,6 +102,130 @@ wait-rest
 expect-dodged 0 1
 background
 grab ventanas-escala
+
+# Estilos al apartarse. Compacta: sin música (el reloj hecho a mano, que
+# cambia de ancho de 9:59 a 10:00), con el foco, y con música.
+set dodgeStyle "compact"
+notrack
+wait-rest
+clock "9:59"
+wait-rest
+expect-dodged 0 1
+background
+grab ventanas-compacta-959
+clock "10:00"
+wait-rest
+expect-dodged 0 1
+grab ventanas-compacta-1000
+focus start
+wait-rest
+expect-dodged 0 1
+grab ventanas-compacta-foco
+focus reset
+wait-rest
+clock
+track "Canción" "Artista"
+wait-rest
+expect-dodged 0 1
+grab ventanas-compacta-cancion
+
+# Difuminada: con el puntero encima vuelve opaca.
+set dodgeStyle "faded"
+set dodgeOpacity 0.35
+wait-rest
+expect-dodged 0 1
+expect-fade 0 35
+background
+grab ventanas-difuminada
+hover 0 1
+wait-rest
+expect-fade 0 100
+grab ventanas-difuminada-puntero
+hover 0 0
+wait-rest
+expect-fade 0 35
+set dodgeOpacity 0.7
+wait-rest
+expect-fade 0 70
+set dodgeOpacity 0.35
+
+# Línea, mini, y el ajuste apagado y encendido.
+set dodgeStyle "line"
+wait-rest
+expect-dodged 0 1
+expect-fade 0 100
+background
+grab ventanas-linea
+set dodgeStyle "mini"
+wait-rest
+expect-dodged 0 1
+set dodgeWindows false
+wait-rest
+expect-fade 0 100
+set dodgeWindows true
+wait-rest
+
+# El menú da la vuelta a los estilos (nada se escribe en el ajuste real);
+# con el ajuste apagado la fila está apagada y no cambia nada.
+expect-setting dodgeStyle mini
+menu
+menu-dodge
+expect-setting dodgeStyle compact
+wait-rest
+expect-dodged 0 1
+menu-dodge
+expect-setting dodgeStyle faded
+wait-rest
+expect-fade 0 35
+menu-dodge
+expect-setting dodgeStyle line
+menu-dodge
+expect-setting dodgeStyle mini
+menu
+set dodgeWindows false
+wait-rest
+menu
+menu-dodge disabled
+expect-setting dodgeStyle mini
+menu
+set dodgeWindows true
+wait-rest
+
+# La píldora y otra escala con cada estilo (sin música, con el reloj hecho
+# a mano, y con el foco en la compacta).
+set islandStyle "pill"
+scale 1.5
+notrack
+set dodgeStyle "compact"
+clock "9:59"
+wait-rest
+expect-dodged 0 1
+grab ventanas-pildora-compacta
+clock "10:00"
+wait-rest
+expect-dodged 0 1
+grab ventanas-pildora-compacta-1000
+focus start
+wait-rest
+expect-dodged 0 1
+grab ventanas-pildora-compacta-foco
+focus reset
+wait-rest
+clock
+set dodgeStyle "faded"
+wait-rest
+expect-dodged 0 1
+grab ventanas-pildora-difuminada
+set dodgeStyle "line"
+wait-rest
+expect-dodged 0 1
+grab ventanas-pildora-linea
+set dodgeStyle "mini"
+set islandStyle "notch"
+scale 1
+track "Canción" "Artista"
+wait-rest
+expect-dodged 0 1
 
 # Dos pantallas: solo se aparta la que tiene la ventana debajo.
 # Las islas se renumeran: la ventana se vuelve a poner bajo la isla 0.

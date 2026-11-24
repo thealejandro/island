@@ -123,7 +123,9 @@ that isn't valid JSON is ignored until it is fixed.
 | `animations` | `system` (as Windows' "Animation effects"), `on`, `off` (no wobble, crossfades, ring or comet: the island goes straight to its size) | `system` |
 | `hideInFullScreen` | `true`, `false` (hides the island on a screen while an app is in full screen there; a notification's glance still comes out if `notificationsInFullScreen` allows it) | `true` |
 | `dualActivity` | `true`, `false` (while a song is loaded and the focus timer is on, the closed island shows the timer in a small bubble beside it; `false`: the song alone, as before) | `true` |
-| `dodgeWindows` | `true`, `false` (Windows: while a window's top edge is under the closed island, it shrinks to a small notch so the controls there can be clicked; `false`: it stays as it is; top bars and docks of other programs that are not tool windows count as windows too) | `true` |
+| `dodgeWindows` | `true`, `false` (Windows: while a window's top edge is under the closed island, it makes way so the controls there can be clicked, in the style `dodgeStyle` sets; `false`: it stays as it is; top bars and docks of other programs that are not tool windows count as windows too) | `true` |
+| `dodgeStyle` | How the island looks while it makes way: `mini` (a small island with a thin rim, and a dot in the cover's color while music plays), `compact` (a thin island with the song, the focus timer or the time in small text), `faded` (keeps its size and content at a low opacity, opaque again under the pointer; it keeps its hit area, so the controls beneath it are not clickable), `line` (the thin line of 0.1.18). Also a row in the tray menu | `mini` |
+| `dodgeOpacity` | How opaque a faded island is while it makes way, `0.1` to `0.9` (`dodgeStyle: faded`) | `0.35` |
 | `defaultPage` | `home`, `focus` | `home` |
 | `focusMinutes` | 5 to 120 | `25` |
 | `breakMinutes` | 1 to 30 | `5` |

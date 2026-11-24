@@ -49,8 +49,14 @@ pub struct Texts {
     pub active_screen: &'static str,
     /// Where a notification goes over a full-screen app, and its values.
     pub in_full_screen: &'static str,
-    /// The closed island shrinks to a notch while a window's top is under it.
+    /// The closed island makes way while a window's top is under it.
     pub dodge_windows: &'static str,
+    /// The menu row for how the island looks while it makes way; its value is one of the four below.
+    pub dodge_style: &'static str,
+    pub dodge_mini: &'static str,
+    pub dodge_compact: &'static str,
+    pub dodge_faded: &'static str,
+    pub dodge_line: &'static str,
     pub fs_here: &'static str,
     pub fs_other: &'static str,
     pub fs_hide: &'static str,
@@ -150,6 +156,11 @@ pub const EN: Texts = Texts {
     active_screen: "Active screen",
     in_full_screen: "In full screen",
     dodge_windows: "Make way for windows",
+    dodge_style: "When making way",
+    dodge_mini: "Mini island",
+    dodge_compact: "Compact",
+    dodge_faded: "Faded",
+    dodge_line: "Line",
     fs_here: "Show here",
     fs_other: "Other screen",
     fs_hide: "Don't show",
@@ -232,6 +243,11 @@ pub const ES: Texts = Texts {
     active_screen: "La activa",
     in_full_screen: "En pantalla completa",
     dodge_windows: "Apartarse de las ventanas",
+    dodge_style: "Al apartarse",
+    dodge_mini: "Isla mini",
+    dodge_compact: "Compacta",
+    dodge_faded: "Atenuada",
+    dodge_line: "Línea",
     fs_here: "Aquí",
     fs_other: "Otra pantalla",
     fs_hide: "No mostrar",
@@ -314,6 +330,11 @@ pub const PT: Texts = Texts {
     active_screen: "A ativa",
     in_full_screen: "Em tela cheia",
     dodge_windows: "Dar espaço às janelas",
+    dodge_style: "Ao dar espaço",
+    dodge_mini: "Ilha mini",
+    dodge_compact: "Compacta",
+    dodge_faded: "Esmaecida",
+    dodge_line: "Linha",
     fs_here: "Aqui",
     fs_other: "Outra tela",
     fs_hide: "Não mostrar",
@@ -361,7 +382,7 @@ pub const PT: Texts = Texts {
 };
 
 /// Every text of `t`, in the order of the struct.
-pub fn all(t: &Texts) -> [&'static str; 79] {
+pub fn all(t: &Texts) -> [&'static str; 84] {
     [
         t.long_break,
         t.open_lyrics,
@@ -398,6 +419,11 @@ pub fn all(t: &Texts) -> [&'static str; 79] {
         t.active_screen,
         t.in_full_screen,
         t.dodge_windows,
+        t.dodge_style,
+        t.dodge_mini,
+        t.dodge_compact,
+        t.dodge_faded,
+        t.dodge_line,
         t.fs_here,
         t.fs_other,
         t.fs_hide,

@@ -48,8 +48,19 @@
 //!   200 DIPs each side, 300 tall; `dx dy w h` (DIPs) move and size it.
 //!   `window-move <dx> <dy>` moves it, as the front window moving; and
 //!   `window-close` takes it away. `expect-dodged <i> <0|1>`: island `i` is
-//!   (1) or is not (0) making way for it, at the notch's height when it is.
-//!   In QA the user's windows are never looked at, moved or resized.
+//!   (1) or is not (0) making way for it, at its style's size when it is
+//!   (a faded one keeps its size and fades instead). In QA the user's
+//!   windows are never looked at, moved or resized.
+//! - `clock "<text>"`: the time of day the compact island shows (and the
+//!   tabs), made up; `clock` alone gives the real one back. `hover <i> <0|1>`:
+//!   the pointer is on (1) or off (0) island `i`'s window, as a faded
+//!   island's opacity sees it (it skips TrackMouseEvent, and no opening).
+//!   `expect-fade <i> <percent>`: island `i`'s opacity is heading to that
+//!   percent. `menu-dodge [disabled]`: the dodge style row, one step to the
+//!   next style (never written); it fails if the row is disabled, unless
+//!   the script says `disabled`: then it must be, and nothing changes.
+//!   `expect-setting <key> <value>`: `dodgeStyle`, `dodgeWindows` or
+//!   `dodgeOpacity` is that, now.
 //! - `lyrics <0|1>`: a made-up synced-lyrics glance on or off (no lookup).
 //! - `quit`.
 
@@ -83,6 +94,13 @@ static ACTIVE: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static QA: RefCell<Option<Qa>> = const { RefCell::new(None) };
+    /// The time of day a script made up with `clock`.
+    static CLOCK: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// The time of day a script made up, if it did.
+pub fn clock() -> Option<String> {
+    CLOCK.with_borrow(Clone::clone)
 }
 
 enum Wait {
@@ -152,7 +170,7 @@ pub fn from_args(args: &[String]) -> std::io::Result<bool> {
     let mut trace = std::io::BufWriter::new(std::fs::File::create(out.join("trace.csv"))?);
     writeln!(
         trace,
-        "t_ms,island,scale,win_x,win_y,win_w,win_h,w,w_target,w_vel,h,h_target,h_vel,body_x,body_w,body_h,a_closed,a_peek,a_open,openness,open,peek_view,shrinking,dodging"
+        "t_ms,island,scale,win_x,win_y,win_w,win_h,w,w_target,w_vel,h,h_target,h_vel,body_x,body_w,body_h,a_closed,a_peek,a_open,openness,open,peek_view,shrinking,dodging,fade"
     )?;
     let mut json = serde_json::Map::new();
     // Nothing that watches the system: the script makes up what shows.
@@ -356,7 +374,7 @@ pub fn frame(app: &App, i: usize) {
     let look = app.look(i);
     let k = look.scale;
     let peek_h = app.peek_unscaled_at(i).1 * k;
-    let a = alphas(sf, look.sizes, k, peek_h);
+    let a = alphas(sf, look.sizes, k, peek_h, app.dodge_size(i).map(|d| d.1));
     let o = openness(sf, look.sizes, k, peek_h);
     let s = sf.scale;
     let placement = look.placement;
@@ -371,7 +389,7 @@ pub fn frame(app: &App, i: usize) {
         let w = sf.window;
         let _ = writeln!(
             q.trace,
-            "{t:.1},{i},{s},{},{},{},{},{:.2},{:.2},{:.3},{:.2},{:.2},{:.3},{:.2},{:.2},{:.2},{:.3},{:.3},{:.3},{o:.3},{},{},{},{}",
+            "{t:.1},{i},{s},{},{},{},{},{:.2},{:.2},{:.3},{:.2},{:.2},{:.3},{:.2},{:.2},{:.2},{:.3},{:.3},{:.3},{o:.3},{},{},{},{},{:.1}",
             w.x,
             w.y,
             w.width,
@@ -392,6 +410,7 @@ pub fn frame(app: &App, i: usize) {
             sf.peek_view as u8,
             sf.shrinking as u8,
             sf.dodging as u8,
+            sf.fade.value,
         );
         // 1: the bubble too, while it is out.
         if let Some(b) = bubble_now(app, i, body)
@@ -801,6 +820,48 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
             };
             let _ = app.menu_choose(i);
         }
+        // The dodge style row: the next style, as a click does (never
+        // written to the real file).
+        "menu-dodge" => {
+            let Some(startup) = app.menu.as_ref().map(|m| m.startup) else {
+                return Err("«menu-dodge»: el menú no está abierto".into());
+            };
+            let rows = app.menu_rows(startup);
+            let Some(i) = rows.iter().position(|r| r.0 == MENU_DODGE_STYLE) else {
+                return Err("«menu-dodge»: no hay fila de estilo en esta página".into());
+            };
+            let expect_off = cmd.get(1).is_some_and(|w| w == "disabled");
+            let enabled = rows[i].1.enabled;
+            let before = app.settings.dodge_style;
+            if expect_off == enabled {
+                let what = if enabled {
+                    "la fila está activa, se esperaba apagada"
+                } else {
+                    "la fila está apagada"
+                };
+                return Err(format!("«menu-dodge»: {what}"));
+            }
+            let _ = app.menu_choose(i);
+            if expect_off && app.settings.dodge_style != before {
+                return Err("«menu-dodge»: una fila apagada cambió el estilo".into());
+            }
+        }
+        "expect-setting" => {
+            let key = cmd.get(1).ok_or("«expect-setting» pide una clave")?.clone();
+            let want = cmd.get(2).ok_or("«expect-setting» pide un valor")?.clone();
+            let got = match key.as_str() {
+                "dodgeStyle" => app.settings.dodge_style.name().to_string(),
+                "dodgeWindows" => app.settings.dodge_windows.to_string(),
+                "dodgeOpacity" => format!("{}", app.settings.dodge_opacity),
+                _ => return Err(format!("«expect-setting»: clave «{key}» desconocida")),
+            };
+            if got != want {
+                QA.with_borrow_mut(|q| {
+                    q.as_mut()
+                        .map(|q| q.fail(format!("8 ajuste {key}: es {got}, se esperaba {want}")))
+                });
+            }
+        }
         "grab-menu" => {
             let name = cmd.get(1).ok_or("«grab-menu» pide un nombre")?.clone();
             let Some(hwnd) = app.menu.as_ref().map(|m| m.hwnd) else {
@@ -1042,22 +1103,99 @@ fn run(app: &mut App, cmd: &[String]) -> std::result::Result<(), String> {
                 return Err(format!("«expect-dodged»: no hay isla {i}"));
             }
             let sf = &app.surfaces[i];
-            let k = app.look(i).scale;
+            let l = app.look(i);
             let got = sf.dodging;
             let mut bad = None;
             if got != want {
                 bad = Some(format!("8 isla {i}: apartada {got}, se esperaba {want}"));
             } else if !want && app.dodged(i) {
                 bad = Some(format!("8 isla {i}: no apartada pero actúa como apartada"));
-            } else if want && app.dodged(i) && (sf.height.target - dodge::NOTCH.1 * k).abs() > 0.5 {
+            } else if want && app.dodged(i) {
+                match app.dodge_size(i) {
+                    Some((w, h)) => {
+                        if (sf.height.target - h).abs() > 0.5 || (sf.width.target - w).abs() > 0.5 {
+                            bad = Some(format!(
+                                "8 isla {i}: apartada con {:.1}x{:.1}, el estilo pide {w:.1}x{h:.1}",
+                                sf.width.target, sf.height.target
+                            ));
+                        } else if app.settings.dodge_style == dodge::DodgeStyle::Compact {
+                            // Within the compact island's bounds, and never
+                            // wider than the closed island.
+                            let k = l.scale;
+                            let closed_w = if app.track.is_some() {
+                                sf.closed_w * k
+                            } else {
+                                l.sizes.closed.0 * k
+                            };
+                            let (lo, hi) = (dodge::COMPACT_WIDTH.0 * k, dodge::COMPACT_WIDTH.1 * k);
+                            if sf.width.target > closed_w + 0.5
+                                || (sf.width.target < lo - 0.5 && closed_w >= lo)
+                                || sf.width.target > hi + 0.5
+                            {
+                                bad = Some(format!(
+                                    "8 isla {i}: compacta de {:.1} px, entre {lo:.1} y {hi:.1} y sin pasar de {closed_w:.1}",
+                                    sf.width.target
+                                ));
+                            }
+                        }
+                    }
+                    None => {
+                        // Faded: the closed height, and the opacity.
+                        let closed = l.sizes.closed.1 * l.scale;
+                        let to = dodge::opacity(app.settings.dodge_opacity) * 100.0;
+                        if (sf.height.target - closed).abs() > 0.5 {
+                            bad = Some(format!(
+                                "8 isla {i}: difuminada con alto {:.1}, el cerrado es {closed:.1}",
+                                sf.height.target
+                            ));
+                        } else if !sf.tracking && (sf.fade.target - to).abs() > 0.5 {
+                            bad = Some(format!(
+                                "8 isla {i}: difuminada con opacidad {:.1} %, se esperaba {to:.1} %",
+                                sf.fade.target
+                            ));
+                        }
+                    }
+                }
+            } else if (sf.fade.target - 100.0).abs() > 0.5 {
                 bad = Some(format!(
-                    "8 isla {i}: apartada con alto {:.1}, la muesca es {:.1}",
-                    sf.height.target,
-                    dodge::NOTCH.1 * k
+                    "8 isla {i}: no apartada pero con opacidad {:.1} %",
+                    sf.fade.target
                 ));
             }
             if let Some(b) = bad {
                 QA.with_borrow_mut(|q| q.as_mut().map(|q| q.fail(b)));
+            }
+        }
+        // The text of the time of day, made up (nothing alone: the real one).
+        "clock" => {
+            CLOCK.set(cmd.get(1).cloned());
+            app.retarget_all();
+        }
+        // The pointer on or off an island's window (no HOVER_TIMER: it does
+        // not open).
+        "hover" => {
+            let i = arg_f(cmd, 1)? as usize;
+            let on = arg_f(cmd, 2)? != 0.0;
+            if i >= app.surfaces.len() {
+                return Err(format!("«hover»: no hay isla {i}"));
+            }
+            app.pointer_over(i, on);
+        }
+        "expect-fade" => {
+            let i = arg_f(cmd, 1)? as usize;
+            let want = arg_f(cmd, 2)?;
+            if i >= app.surfaces.len() {
+                return Err(format!("«expect-fade»: no hay isla {i}"));
+            }
+            let got = app.surfaces[i].fade.target;
+            if (got - want).abs() > 0.5 {
+                QA.with_borrow_mut(|q| {
+                    q.as_mut().map(|q| {
+                        q.fail(format!(
+                            "8 isla {i}: la opacidad va a {got:.1} %, se esperaba {want:.1} %"
+                        ))
+                    })
+                });
             }
         }
         // A synced-lyrics glance, made up: the worker never gets a query,

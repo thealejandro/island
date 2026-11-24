@@ -9,6 +9,7 @@
 use serde_json::{Map, Value};
 
 use crate::color;
+use crate::dodge::{self, DodgeStyle};
 use crate::focus::Lengths;
 use crate::media::{self, SongText, TextAlign};
 use crate::monitor::{FullScreen, GlanceScreen, MonitorChoice, Pick};
@@ -238,9 +239,13 @@ pub struct Settings {
     /// While a song is loaded and the focus timer is on, the closed island
     /// shows the timer in a small bubble beside it.
     pub dual_activity: bool,
-    /// The closed island shrinks to a small notch while a window's top edge
-    /// is under it (see `dodge`), so the controls beneath stay reachable.
+    /// The closed island makes way while a window's top edge is under it
+    /// (see `dodge`), so the controls beneath stay reachable.
     pub dodge_windows: bool,
+    /// How the island looks while it makes way (global, no per-screen value).
+    pub dodge_style: DodgeStyle,
+    /// How opaque the island is while it makes way in the faded style.
+    pub dodge_opacity: f32,
     /// What each screen has of its own over the settings above, by the
     /// screen's device id or its number (see [`Settings::screen`]).
     pub screens: Vec<(String, ScreenOverride)>,
@@ -384,6 +389,8 @@ impl Default for Settings {
             hide_in_full_screen: true,
             dual_activity: true,
             dodge_windows: true,
+            dodge_style: DodgeStyle::Mini,
+            dodge_opacity: dodge::OPACITY_DEFAULT,
             screens: Vec::new(),
         }
     }
@@ -415,6 +422,8 @@ pub const TEMPLATE: &str = r#"{
   "hideInFullScreen": true,
   "dualActivity": true,
   "dodgeWindows": true,
+  "dodgeStyle": "mini",
+  "dodgeOpacity": 0.35,
   "focusMinutes": 25,
   "breakMinutes": 5,
   "longBreakMinutes": 15,
@@ -584,6 +593,10 @@ impl Settings {
             hide_in_full_screen: flag("hideInFullScreen", d.hide_in_full_screen),
             dual_activity: flag("dualActivity", d.dual_activity),
             dodge_windows: flag("dodgeWindows", d.dodge_windows),
+            dodge_style: text("dodgeStyle")
+                .and_then(DodgeStyle::parse)
+                .unwrap_or(d.dodge_style),
+            dodge_opacity: size("dodgeOpacity", dodge::OPACITY, false, d.dodge_opacity),
             screens: Self::parse_screens(o.get("screens")),
         })
     }
@@ -1178,6 +1191,22 @@ mod tests {
         assert!(parse("{}").dodge_windows);
         assert!(!parse(r#"{"dodgeWindows": false}"#).dodge_windows);
         assert!(parse(r#"{"dodgeWindows": "no"}"#).dodge_windows);
+        assert_eq!(parse(TEMPLATE).dodge_style, DodgeStyle::Mini);
+        assert_eq!(parse(TEMPLATE).dodge_opacity, 0.35);
+        assert_eq!(parse("{}").dodge_style, DodgeStyle::Mini);
+        assert_eq!(parse("{}").dodge_opacity, 0.35);
+        for v in DodgeStyle::ALL {
+            let s = parse(&format!(r#"{{"dodgeStyle": "{}"}}"#, v.name()));
+            assert_eq!(s.dodge_style, v);
+        }
+        for bad in [r#""notch""#, r#""bogus""#, "7"] {
+            let s = parse(&format!(r#"{{"dodgeStyle": {bad}}}"#));
+            assert_eq!(s.dodge_style, DodgeStyle::Mini);
+        }
+        assert_eq!(parse(r#"{"dodgeOpacity": 0.05}"#).dodge_opacity, 0.1);
+        assert_eq!(parse(r#"{"dodgeOpacity": 5}"#).dodge_opacity, 0.9);
+        assert_eq!(parse(r#"{"dodgeOpacity": 0.5}"#).dodge_opacity, 0.5);
+        assert_eq!(parse(r#"{"dodgeOpacity": "x"}"#).dodge_opacity, 0.35);
         assert_eq!(parse(TEMPLATE).glance_screen, GlanceScreen::All);
         let s = parse(r#"{"glanceScreen": "active"}"#);
         assert_eq!(s.glance_screen, GlanceScreen::Active);

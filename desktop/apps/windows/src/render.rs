@@ -7,6 +7,7 @@ use std::rc::{Rc, Weak};
 
 use island_core::activity;
 use island_core::color;
+use island_core::dodge;
 use island_core::glance;
 use island_core::icons::{self, Icon};
 use island_core::lyrics::Line;
@@ -42,8 +43,8 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
 };
 use windows::Win32::Graphics::DirectComposition::{
-    DCompositionCreateDevice, IDCompositionAnimation, IDCompositionDevice, IDCompositionSurface,
-    IDCompositionTarget, IDCompositionVisual,
+    DCompositionCreateDevice, IDCompositionAnimation, IDCompositionDevice, IDCompositionEffect,
+    IDCompositionEffectGroup, IDCompositionSurface, IDCompositionTarget, IDCompositionVisual,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_FEATURE, DWRITE_FONT_FEATURE_TAG_TABULAR_FIGURES,
@@ -109,10 +110,18 @@ pub struct Scene<'a> {
     pub size: (f32, f32),
     /// How visible the closed, glance and open contents are (0 to 1).
     pub alpha: [f32; 3],
-    /// How much of the closed island shows while it shrinks to a notch to
-    /// make way for a window (`dodge::presence`): 1 otherwise. It also
-    /// fades the cover's glow and the pill's shadow.
+    /// How much of the closed island shows while it shrinks to make way for
+    /// a window (`dodge::presence`): 1 otherwise. It also fades the cover's
+    /// glow.
     pub presence: f32,
+    /// How opaque the whole island is (0 to 1): below 1 only while a faded
+    /// island makes way. One opacity on the window's root visual, so the
+    /// body, the content, the glow and the bars all follow.
+    pub fade: f32,
+    /// The look of an island that makes way in the mini or compact style,
+    /// and how far it has arrived (`dodge::arrival`, 0 to 1).
+    pub dodge: Option<Dodged<'a>>,
+    pub arrival: f32,
     pub track: Option<&'a Track>,
     pub position_ms: u64,
     pub empty: &'a str,
@@ -156,6 +165,29 @@ pub struct Scene<'a> {
     /// What the pointer is over in the open island, and whether it's down.
     pub hot: Option<Hot>,
     pub pressed: bool,
+}
+
+/// What a mini or a compact island that makes way shows.
+pub enum Dodged<'a> {
+    /// A dot in the cover's color while music plays.
+    Mini { dot: bool },
+    /// The song (`spans`), or with `numbers` the time left or the time of
+    /// day (the first span's text, with tabular figures).
+    Compact {
+        spans: &'a [(String, bool)],
+        numbers: bool,
+    },
+}
+
+/// Which of the island's text formats to measure with.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Measure {
+    Closed,
+    Peek,
+    Compact,
+    /// The compact island's figures (a clock, a time left), with the
+    /// tabular digits they are drawn with.
+    CompactNumbers,
 }
 
 /// The focus timer's bubble beside the closed island: its own small shape
@@ -428,6 +460,8 @@ struct Text {
     empty: IDWriteTextFormat,
     peek: IDWriteTextFormat,
     closed: IDWriteTextFormat,
+    /// The compact island that makes way: small, centered.
+    compact: IDWriteTextFormat,
     /// The menu's, compact and large (`menu::Look::ALL`'s order).
     menu: [MenuFonts; 2],
     clock: IDWriteTextFormat,
@@ -490,6 +524,12 @@ pub struct Renderer {
     // Kept alive: dropping the target detaches the visual from the window.
     _target: IDCompositionTarget,
     visual: IDCompositionVisual,
+    /// The opacity last given to the root visual (1: none).
+    opacity: f32,
+    /// Its effect group, made once and kept while the opacity is below 1.
+    effect: Option<IDCompositionEffectGroup>,
+    /// The dodged island's rim stroke, made once.
+    rim_style: std::cell::OnceCell<Option<windows::Win32::Graphics::Direct2D::ID2D1StrokeStyle>>,
     /// While the cover travels between views, they leave it out.
     morphing: bool,
     /// Drawing the island's content at rest: its pieces snap to whole
@@ -703,6 +743,7 @@ impl Text {
                 empty: format(n, 14.0, DWRITE_TEXT_ALIGNMENT_CENTER)?,
                 peek: format(b, 13.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
                 closed: format(b, 12.0, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+                compact: format(b, 10.0, DWRITE_TEXT_ALIGNMENT_CENTER)?,
                 menu: {
                     let fonts = |look: menu::Look| -> Result<MenuFonts> {
                         let s = look.size();
@@ -816,6 +857,9 @@ impl Renderer {
             Ok(Self {
                 bars,
                 bars_at: None,
+                opacity: 1.0,
+                effect: None,
+                rim_style: std::cell::OnceCell::new(),
                 view: (0.0, 1.0, 0.0),
                 fit: 1.0,
                 morphing: false,
@@ -2050,6 +2094,131 @@ impl Renderer {
         drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
     }
 
+    /// What the island that makes way shows at `a` (see `Dodged`), in the
+    /// closed island's DIPs: the dot, or the compact text, centered.
+    fn draw_dodged(&self, s: &Scene, d: &Dodged, a: f32) {
+        let cx = s.size.0 / 2.0;
+        match d {
+            Dodged::Mini { dot } => {
+                if *dot {
+                    let color = self.accent.map_or_else(windows_accent, color::vivid);
+                    let side = 5.0;
+                    let high = s.size.1 / s.island_scale.max(0.01);
+                    let r = Rect {
+                        x: cx - side / 2.0,
+                        y: (high - side) / 2.0,
+                        width: side,
+                        height: side,
+                    };
+                    self.tinted_rounded(r, side / 2.0, color, a);
+                }
+            }
+            Dodged::Compact { spans, numbers } => {
+                let wide = s.size.0 / s.island_scale.max(0.01);
+                let r = Rect {
+                    x: cx - wide / 2.0 + dodge::COMPACT_PAD,
+                    y: 0.0,
+                    width: (wide - 2.0 * dodge::COMPACT_PAD).max(1.0),
+                    height: s.size.1 / s.island_scale.max(0.01),
+                };
+                if *numbers {
+                    let text = spans.first().map_or("", |s| s.0.as_str());
+                    self.numbers(text, &self.text.compact, r, WHITE, INK * a);
+                } else {
+                    self.song(spans, &self.text.compact, r, a);
+                }
+            }
+        }
+    }
+
+    /// A thin light line just inside the body's edge, so a dark island is
+    /// seen against a dark title bar (px, from the body's top-left).
+    /// `hangs`: the island hangs from the screen's edge, so no line is drawn
+    /// along that edge.
+    fn rim(&self, geo: &ID2D1PathGeometry, a: f32, scale: f32, hangs: bool) {
+        let style = self.rim_style.get_or_init(|| {
+            let props = D2D1_STROKE_STYLE_PROPERTIES1 {
+                lineJoin: windows::Win32::Graphics::Direct2D::D2D1_LINE_JOIN_ROUND,
+                ..Default::default()
+            };
+            unsafe { self.factory.CreateStrokeStyle(&props, None) }
+                .and_then(|s| s.cast::<windows::Win32::Graphics::Direct2D::ID2D1StrokeStyle>())
+                .ok()
+        });
+        // Inside only (a stroke shows its inner half: twice as wide), so
+        // nothing is drawn outside the body.
+        let params = D2D1_LAYER_PARAMETERS1 {
+            contentBounds: D2D_RECT_F {
+                left: f32::MIN,
+                top: f32::MIN,
+                right: f32::MAX,
+                bottom: f32::MAX,
+            },
+            geometricMask: std::mem::ManuallyDrop::new(geo.cast::<ID2D1Geometry>().ok()),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity: 1.0,
+            opacityBrush: std::mem::ManuallyDrop::new(None),
+            layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+        };
+        unsafe {
+            if hangs {
+                self.dc.PushAxisAlignedClip(
+                    &D2D_RECT_F {
+                        left: -1.0e5,
+                        top: 2.0 * scale,
+                        right: 1.0e5,
+                        bottom: 1.0e5,
+                    },
+                    D2D1_ANTIALIAS_MODE_ALIASED,
+                );
+            }
+            self.dc.PushLayer(&params, None::<&ID2D1Layer>);
+            self.ink.SetColor(&D2D1_COLOR_F {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 0.28 * a,
+            });
+            self.dc
+                .DrawGeometry(geo, &self.ink, 2.0 * scale, style.as_ref());
+            self.dc.PopLayer();
+            if hangs {
+                self.dc.PopAxisAlignedClip();
+            }
+        }
+        drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
+    }
+
+    /// The whole island's opacity (a faded island making way), on the root
+    /// visual: the body, the content and the bars change together. Takes
+    /// effect with the next commit.
+    fn set_opacity(&mut self, a: f32) -> Result<()> {
+        let a = if a.is_nan() { 1.0 } else { a.clamp(0.0, 1.0) };
+        if (a - self.opacity).abs() < 1e-4 {
+            return Ok(());
+        }
+        unsafe {
+            if a >= 0.999 {
+                // Settled at full: nothing is composed any more.
+                if self.effect.take().is_some() {
+                    self.visual.SetEffect(None::<&IDCompositionEffect>)?;
+                }
+            } else {
+                if self.effect.is_none() {
+                    let group = self.dcomp.CreateEffectGroup()?;
+                    self.visual.SetEffect(&group)?;
+                    self.effect = Some(group);
+                }
+                if let Some(group) = &self.effect {
+                    group.SetOpacity2(a)?;
+                }
+            }
+        }
+        self.opacity = a;
+        Ok(())
+    }
+
     fn draw_closed(&mut self, s: &Scene, dx: f32, alpha: f32) {
         let Some(t) = s.track else {
             // Nothing playing: the focus timer, while a session is on.
@@ -2085,20 +2254,27 @@ impl Renderer {
         self.bars(t, shift(bars, dx), alpha);
     }
 
-    /// How wide a line of the closed island's text (`closed`) or of the
-    /// song's glance takes, in DIPs, on one line.
-    pub fn text_width(&self, spans: &[(String, bool)], closed: bool) -> f32 {
+    /// How wide a line of the closed island's text, of the song's glance or
+    /// of the compact island's takes, in DIPs, on one line.
+    pub fn text_width(&self, spans: &[(String, bool)], which: Measure) -> f32 {
         let text: Vec<u16> = spans.iter().flat_map(|s| s.0.encode_utf16()).collect();
-        let format = if closed {
-            &self.text.closed
-        } else {
-            &self.text.peek
+        let format = match which {
+            Measure::Closed => &self.text.closed,
+            Measure::Peek => &self.text.peek,
+            Measure::Compact | Measure::CompactNumbers => &self.text.compact,
         };
         unsafe {
             let Ok(layout) = self.text.dw.CreateTextLayout(&text, format, 4000.0, 64.0) else {
                 return 0.0;
             };
             let mut m = DWRITE_TEXT_METRICS::default();
+            if which == Measure::CompactNumbers {
+                let all = DWRITE_TEXT_RANGE {
+                    startPosition: 0,
+                    length: text.len() as u32,
+                };
+                let _ = layout.SetTypography(&self.text.numbers, all);
+            }
             if layout.GetMetrics(&mut m).is_err() {
                 return 0.0;
             }
@@ -2458,6 +2634,12 @@ impl Renderer {
                     let a = self.enter(&base, cx, closed, s.island_scale);
                     self.draw_closed(s, (s.size.0 - w) / 2.0, a);
                 }
+                if let Some(d) = &s.dodge
+                    && s.arrival > 0.0
+                {
+                    let a = self.enter(&base, cx, s.arrival, s.island_scale);
+                    self.draw_dodged(s, d, a);
+                }
                 if peek > 0.0 {
                     let a = self.enter(&base, cx, peek, s.island_scale);
                     self.draw_peek(s, (s.size.0 - s.peek_width) / 2.0, a);
@@ -2479,6 +2661,12 @@ impl Renderer {
                 self.dc.PopAxisAlignedClip();
                 self.dc.PopLayer();
                 drop(std::mem::ManuallyDrop::into_inner(mask.geometricMask));
+                // The thin rim of a mini or compact island, on top of all.
+                if s.dodge.is_some() && s.arrival > 0.0 {
+                    self.dc.SetTransform(&Matrix3x2::translation(bx, by));
+                    // (Ears mean it hangs from the edge.)
+                    self.rim(&geo, s.arrival, s.scale, s.inset > 0.0);
+                }
 
                 self.dc.PopAxisAlignedClip();
                 let ended = self.dc.EndDraw(None, None);
@@ -2517,6 +2705,7 @@ impl Renderer {
             if let Some(sh) = s.shadow {
                 self.draw_shadow(s, sh)?;
             }
+            self.set_opacity(s.fade)?;
             self.dcomp.Commit()
         }
     }
