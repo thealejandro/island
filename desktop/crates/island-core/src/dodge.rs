@@ -1,14 +1,137 @@
 //! The closed island making way for windows (#160): when the top edge of a
 //! window sits under it (a maximized or snapped window's title bar and tabs),
-//! it shrinks to a small notch so the controls underneath can be clicked.
+//! it makes way (a mini island, a compact one, a faded one or a thin line,
+//! see [`DodgeStyle`]) so the controls underneath can be clicked.
 //!
 //! Pure geometry, no OS: the apps feed it rectangles in the same pixels.
 
 use crate::shape::Rect;
 
-/// The size of the notch the dodging island shrinks to, in DIPs (times the
-/// island scale).
-pub const NOTCH: (f32, f32) = (48.0, 6.0);
+/// How the closed island looks while it makes way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DodgeStyle {
+    /// A mini island with a thin rim, and a dot while music plays.
+    #[default]
+    Mini,
+    /// A thin island with the song, the focus timer or the time in small text.
+    Compact,
+    /// Keeps its size and content, at a low opacity.
+    Faded,
+    /// The thin line of 0.1.18.
+    Line,
+}
+
+impl DodgeStyle {
+    pub const ALL: [Self; 4] = [Self::Mini, Self::Compact, Self::Faded, Self::Line];
+
+    /// The name in the settings file.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Mini => "mini",
+            Self::Compact => "compact",
+            Self::Faded => "faded",
+            Self::Line => "line",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim();
+        Self::ALL
+            .into_iter()
+            .find(|v| v.name().eq_ignore_ascii_case(s))
+    }
+
+    /// The next one in the menu's cycle, wrapping around.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Mini => Self::Compact,
+            Self::Compact => Self::Faded,
+            Self::Faded => Self::Line,
+            Self::Line => Self::Mini,
+        }
+    }
+}
+
+/// The size of the line, in DIPs (times the island scale).
+pub const LINE: (f32, f32) = (48.0, 6.0);
+
+/// The size of the mini island, in DIPs.
+pub const MINI: (f32, f32) = (110.0, 12.0);
+
+/// The compact island's height, in DIPs.
+pub const COMPACT_HEIGHT: f32 = 16.0;
+
+/// Room on each side of the compact island's text, in DIPs.
+pub const COMPACT_PAD: f32 = 10.0;
+
+/// The least and the most the compact island is wide, in DIPs.
+pub const COMPACT_WIDTH: (f32, f32) = (48.0, 220.0);
+
+/// The least and the most opaque a faded island is.
+pub const OPACITY: (f32, f32) = (0.1, 0.9);
+
+/// The default opacity of a faded island.
+pub const OPACITY_DEFAULT: f32 = 0.35;
+
+/// The least height, in DIPs, of the region where hovering opens a dodging
+/// island that floats (one that hangs from the edge keeps its own).
+pub const HOVER: f32 = 10.0;
+
+/// The compact island's width for a text `text_w` wide, in DIPs.
+pub fn compact_width(text_w: f32) -> f32 {
+    let w = if text_w.is_nan() {
+        0.0
+    } else {
+        text_w.max(0.0)
+    };
+    (w + 2.0 * COMPACT_PAD)
+        .ceil()
+        .clamp(COMPACT_WIDTH.0, COMPACT_WIDTH.1)
+}
+
+/// The size a dodging island takes, in unscaled DIPs, given the closed size
+/// it leaves and the compact text's width. `None` for [`DodgeStyle::Faded`]:
+/// it keeps its size. Never wider or taller than `closed`.
+pub fn size(style: DodgeStyle, closed: (f32, f32), text_w: f32) -> Option<(f32, f32)> {
+    let (w, h) = match style {
+        DodgeStyle::Mini => MINI,
+        DodgeStyle::Compact => (compact_width(text_w), COMPACT_HEIGHT),
+        DodgeStyle::Line => LINE,
+        DodgeStyle::Faded => return None,
+    };
+    Some((w.min(closed.0), h.min(closed.1)))
+}
+
+/// `size` times the island scale.
+pub fn scaled((w, h): (f32, f32), k: f32) -> (f32, f32) {
+    (w * k, h * k)
+}
+
+/// How much of the dodged look (rim, dot, text) shows at `height`: the
+/// complement of [`presence`]. 0 until 60 % of the way down from the closed
+/// height, 1 at `small_h`.
+pub fn arrival(height: f32, closed_h: f32, small_h: f32) -> f32 {
+    let span = closed_h - small_h;
+    if span <= 0.0 {
+        return 0.0;
+    }
+    let down = ((closed_h - height) / span).clamp(0.0, 1.0);
+    ((down - 0.6) / 0.4).clamp(0.0, 1.0)
+}
+
+/// The height of the region where hovering opens a dodging island.
+pub fn hover_height(h: f32, hangs: bool, scale: f32) -> f32 {
+    if hangs { h } else { h.max(HOVER * scale) }
+}
+
+/// `v` as a faded island's opacity: clamped, the default if it is not a number.
+pub fn opacity(v: f32) -> f32 {
+    if v.is_nan() {
+        OPACITY_DEFAULT
+    } else {
+        v.clamp(OPACITY.0, OPACITY.1)
+    }
+}
 
 /// How far above the island a window's top may be and still count, in DIPs
 /// (a maximized window sits a few pixels above the screen).
@@ -77,7 +200,7 @@ pub fn counts(f: Flags) -> bool {
 /// windows' rectangles from the topmost down: the first one that touches the
 /// island decides (the ones below it are hidden by it). `was` is the island's
 /// current state: it adds [`STICK`] of clearance, so leaving needs more than
-/// entering. `island` is the resting closed body, never the notch.
+/// entering. `island` is the resting closed body, never the dodged one.
 pub fn decide(
     was: bool,
     island: Rect,
@@ -96,10 +219,11 @@ pub fn decide(
 }
 
 /// How much of the closed content shows at `height`: 1 at the closed height
-/// and above, 0 once 60 % of the way down to the notch, rising smoothly in
-/// between. It multiplies the content's alpha, the glow and the shadow.
-pub fn presence(height: f32, closed_h: f32, notch_h: f32) -> f32 {
-    let span = closed_h - notch_h;
+/// and above, 0 once 60 % of the way down to the dodged height, rising
+/// smoothly in between. It multiplies the content's alpha, the glow and the
+/// shadow. A faded island keeps its size and does not use it.
+pub fn presence(height: f32, closed_h: f32, small_h: f32) -> f32 {
+    let span = closed_h - small_h;
     if span <= 0.0 {
         return 1.0;
     }
@@ -302,9 +426,114 @@ mod tests {
     }
 
     #[test]
-    fn notch_is_smaller_than_the_least_closed_size() {
-        assert!(NOTCH.0 < 120.0);
-        assert!(NOTCH.1 < 24.0);
+    fn styles_round_trip_and_cycle() {
+        assert_eq!(DodgeStyle::default(), DodgeStyle::Mini);
+        for v in DodgeStyle::ALL {
+            assert_eq!(DodgeStyle::parse(v.name()), Some(v));
+        }
+        let mut v = DodgeStyle::Mini;
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            seen.push(v);
+            v = v.next();
+        }
+        assert_eq!(v, DodgeStyle::Mini);
+        assert_eq!(seen, DodgeStyle::ALL.to_vec());
+        assert_eq!(DodgeStyle::parse("  Compact "), Some(DodgeStyle::Compact));
+        assert_eq!(DodgeStyle::parse("FADED"), Some(DodgeStyle::Faded));
+        assert_eq!(DodgeStyle::parse("notch"), None);
+        assert_eq!(DodgeStyle::parse(""), None);
+    }
+
+    #[test]
+    fn sizes_per_style() {
+        let closed = (180.0, 32.0);
+        assert_eq!(size(DodgeStyle::Mini, closed, 0.0), Some((110.0, 12.0)));
+        assert_eq!(size(DodgeStyle::Line, closed, 0.0), Some((48.0, 6.0)));
+        assert_eq!(size(DodgeStyle::Faded, closed, 0.0), None);
+        assert_eq!(size(DodgeStyle::Compact, closed, 0.0), Some((48.0, 16.0)));
+        assert_eq!(
+            size(DodgeStyle::Compact, closed, 100.0),
+            Some((120.0, 16.0))
+        );
+        // Never wider than the closed island.
+        assert_eq!(
+            size(DodgeStyle::Compact, closed, 900.0),
+            Some((180.0, 16.0))
+        );
+        let wide = (400.0, 32.0);
+        assert_eq!(size(DodgeStyle::Compact, wide, 900.0), Some((220.0, 16.0)));
+    }
+
+    #[test]
+    fn sizes_fit_in_the_least_closed_size() {
+        for v in DodgeStyle::ALL {
+            for text in [0.0, 80.0, 1000.0] {
+                if let Some((w, h)) = size(v, (120.0, 24.0), text) {
+                    assert!(h < 24.0, "{v:?} is {h} tall");
+                    assert!(w <= 120.0, "{v:?} is {w} wide");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scaled_multiplies() {
+        for k in [0.8, 1.0, 1.4] {
+            let (w, h) = scaled(MINI, k);
+            assert!((w - 110.0 * k).abs() < 1e-4);
+            assert!((h - 12.0 * k).abs() < 1e-4);
+        }
+        assert_eq!(scaled(LINE, 1.0), LINE);
+    }
+
+    #[test]
+    fn compact_width_is_padded_and_bounded() {
+        assert_eq!(compact_width(0.0), 48.0);
+        assert_eq!(compact_width(50.2), 71.0);
+        assert_eq!(compact_width(1000.0), 220.0);
+        assert_eq!(compact_width(-5.0), 48.0);
+        assert_eq!(compact_width(f32::NAN), 48.0);
+        assert_eq!(compact_width(f32::INFINITY), 220.0);
+    }
+
+    #[test]
+    fn arrival_complements_presence() {
+        let (closed, small) = (32.0, 12.0);
+        assert_eq!(arrival(closed, closed, small), 0.0);
+        assert_eq!(arrival(closed + 5.0, closed, small), 0.0);
+        let sixty = closed - 0.6 * (closed - small);
+        assert!(arrival(sixty, closed, small).abs() < 1e-5);
+        assert!((arrival(small, closed, small) - 1.0).abs() < 1e-5);
+        assert!((arrival(0.0, closed, small) - 1.0).abs() < 1e-5);
+        let mut last = 1.0;
+        let mut h = small;
+        while h <= closed {
+            let a = arrival(h, closed, small);
+            assert!((0.0..=1.0).contains(&a));
+            assert!(a <= last);
+            last = a;
+            // Never both visible.
+            assert!(presence(h, closed, small) * a < 1e-5);
+            h += 0.5;
+        }
+        assert_eq!(arrival(5.0, 6.0, 6.0), 0.0);
+    }
+
+    #[test]
+    fn hover_height_floors_only_floating_islands() {
+        assert_eq!(hover_height(6.0, true, 1.0), 6.0);
+        assert_eq!(hover_height(6.0, false, 1.0), 10.0);
+        assert_eq!(hover_height(6.0, false, 2.0), 20.0);
+        assert_eq!(hover_height(16.0, false, 1.0), 16.0);
+    }
+
+    #[test]
+    fn opacity_is_clamped() {
+        assert_eq!(opacity(0.0), 0.1);
+        assert_eq!(opacity(5.0), 0.9);
+        assert_eq!(opacity(0.5), 0.5);
+        assert_eq!(opacity(f32::NAN), OPACITY_DEFAULT);
     }
 
     #[test]

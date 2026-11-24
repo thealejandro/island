@@ -37,7 +37,7 @@ use island_core::activity;
 use island_core::agenda as core_agenda;
 use island_core::battery::Note as BatteryNote;
 use island_core::bluetooth::Event as BtEvent;
-use island_core::dodge;
+use island_core::dodge::{self, DodgeStyle};
 use island_core::focus::{self, Ended, Lengths, Phase};
 use island_core::glance;
 use island_core::install::Offer;
@@ -114,8 +114,6 @@ fn frame_for(placement: Placement, form: shape::Form, s: f32) -> shape::Frame {
     }
 }
 const HOVER_DELAY_MS: u32 = 120;
-/// The least height, in DIPs, a floating notch keeps to be hovered.
-const DODGED_HOVER: f32 = 10.0;
 
 const HOVER_TIMER: usize = 1;
 /// Moves a menu switch's knob, every 15 ms for `KNOB_MS` (on the menu's window).
@@ -812,6 +810,8 @@ const MENU_RESET: u32 = 20;
 const MENU_LANGUAGE: u32 = 21;
 /// The closed island makes way for windows.
 const MENU_DODGE: u32 = 22;
+/// How it looks while it does: the next style at each click.
+const MENU_DODGE_STYLE: u32 = 23;
 /// The screens' switches: this plus the screen's index in `App::screens`.
 const MENU_SCREEN: u32 = 100;
 const MENU_CLASS: PCWSTR = w!("IslandMenu");
@@ -963,9 +963,18 @@ struct Surface {
     /// size (the window's region would cut a shadow off). Only while the
     /// style is pill.
     shadow_hwnd: Option<HWND>,
-    /// A window's top edge is under the closed island: it is a small notch
-    /// (see `dodge`) until the pointer opens it or the window leaves.
+    /// A window's top edge is under the closed island: it makes way (see
+    /// `dodge`, and `dodgeStyle` for how) until the pointer opens it or the
+    /// window leaves.
     dodging: bool,
+    /// How opaque it is, in percent (the springs stop within 0.25, so not
+    /// 0 to 1): below 100 only while a faded island makes way and the
+    /// pointer is not on it.
+    fade: Spring,
+    /// The height (px) it last made way to: set while it makes way, cleared
+    /// once it is back to its closed height, so the look goes out smoothly
+    /// (also when the style changes).
+    dodge_from: Option<f32>,
 }
 
 impl Drop for Surface {
@@ -1033,6 +1042,8 @@ impl Surface {
             muted: false,
             shadow_hwnd: None,
             dodging: false,
+            fade: Spring::at(100.0),
+            dodge_from: None,
         })
     }
 
@@ -1227,18 +1238,29 @@ enum Hit {
 }
 
 /// How much of the closed content shows, while the island makes way for a
-/// window (or goes to): 1 otherwise, whatever its height.
-fn presence_of(sf: &Surface, closed_h: f32, k: f32) -> f32 {
-    if sf.dodging || sf.height.target < closed_h - 0.5 {
-        dodge::presence(sf.height.value, closed_h, dodge::NOTCH.1 * k)
-    } else {
-        1.0
+/// window (or goes to): 1 otherwise, whatever its height. `small_h` is the
+/// height it makes way to, on screen (`None`: a faded island keeps its
+/// size and content).
+fn presence_of(sf: &Surface, closed_h: f32, small_h: Option<f32>) -> f32 {
+    // The height last made way to, so the look also goes out smoothly.
+    match sf.dodge_from.or(small_h) {
+        Some(small) if sf.dodge_from.is_some() => dodge::presence(sf.height.value, closed_h, small),
+        _ => 1.0,
+    }
+}
+
+/// How far the look of an island that makes way (the rim, the dot, the
+/// compact text) has come in: the other half of `presence_of`.
+fn arrival_of(sf: &Surface, closed_h: f32, small_h: Option<f32>) -> f32 {
+    match sf.dodge_from.or(small_h) {
+        Some(small) if sf.dodge_from.is_some() => dodge::arrival(sf.height.value, closed_h, small),
+        _ => 0.0,
     }
 }
 
 /// How visible the closed, glance and open contents are, from the body's
 /// height: each one fades as the body leaves its size.
-fn alphas(sf: &Surface, sz: layout::Sizes, k: f32, peek_h: f32) -> [f32; 3] {
+fn alphas(sf: &Surface, sz: layout::Sizes, k: f32, peek_h: f32, small_h: Option<f32>) -> [f32; 3] {
     let h = sf.height.value;
     let closed_h = sz.closed.1 * k;
     // From the view it grows from: a tall glance (a notification's) isn't
@@ -1259,8 +1281,8 @@ fn alphas(sf: &Surface, sz: layout::Sizes, k: f32, peek_h: f32) -> [f32; 3] {
     let pace = if sf.shrinking { 2.4 } else { 3.0 };
     let leaving = (1.0 - open * pace).clamp(0.0, 1.0);
     // Making way for a window: the closed content fades as the body
-    // shrinks to its notch (1 at any other height).
-    let presence = presence_of(sf, closed_h, k);
+    // shrinks to its small size (1 at any other height).
+    let presence = presence_of(sf, closed_h, small_h);
     if sf.peek_view {
         // One gives way to the other halfway, so they never overlap. A
         // taller glance (a notification's) is fully there by the song's
@@ -1314,7 +1336,7 @@ fn swap_from(sf: &mut Surface, sz: layout::Sizes, k: f32, peek_h: f32, before: B
         && sf.peek_view
         && sf.height.target > sz.closed.1 * k
         && (sf.height.value - sf.height.target).abs() < 0.5
-        && alphas(sf, sz, k, peek_h)[1] > 0.99;
+        && alphas(sf, sz, k, peek_h, None)[1] > 0.99;
     // Animations off: the new content is just there.
     if !at_rest || !motion() {
         return;
@@ -1398,6 +1420,9 @@ struct App {
     /// The song's name as measured in the closed island's text, in DIPs:
     /// each island's width with music follows from it (`Surface::closed_w`).
     name_w: f32,
+    /// The compact island's text as measured, in DIPs (only while that is
+    /// the style that makes way): its width follows from it.
+    compact_w: f32,
     /// The open island's page: the one last chosen (while the app runs).
     page: Page,
     /// The page just left, and when: the two cross as the tabs change.
@@ -1839,9 +1864,28 @@ impl App {
         let now = self.now_ms();
         let peek_u = self.peek_unscaled_at(i);
         let peek_h = peek_u.1 * k;
-        let alpha = alphas(&self.surfaces[i], lk.sizes, k, peek_h);
-        let presence = presence_of(&self.surfaces[i], lk.sizes.closed.1 * k, k);
+        let small = self.dodge_size(i).map(|s| s.1);
+        let alpha = alphas(&self.surfaces[i], lk.sizes, k, peek_h, small);
+        let closed_h = lk.sizes.closed.1 * k;
+        let presence = presence_of(&self.surfaces[i], closed_h, small);
+        let arrival = arrival_of(&self.surfaces[i], closed_h, small);
+        let style = self.settings.dodge_style;
         let dodged = self.dodged(i);
+        {
+            // Back at its closed height: the look is out.
+            let sf = &mut self.surfaces[i];
+            if !dodged && sf.height.value >= closed_h - 0.5 {
+                sf.dodge_from = None;
+            }
+        }
+        // What the mini or compact island that makes way shows (the clock
+        // is only read while it does).
+        let (compact, compact_numbers) = if style == DodgeStyle::Compact && arrival > 0.0 {
+            self.compact_text()
+        } else {
+            (Vec::new(), false)
+        };
+        let playing = self.track.as_ref().is_some_and(|t| t.playing);
         let open_a = openness(&self.surfaces[i], lk.sizes, k, peek_h);
         let glance_on = self.glance();
         let scroll = self.lyric_scroll();
@@ -1863,6 +1907,8 @@ impl App {
         let s = sf.scale;
         let (w, h) = sf.body_px();
         let radius = RADIUS * s;
+        // The springs may overshoot a little.
+        let fade = (sf.fade.value / 100.0).clamp(0.0, 1.0);
         let body = f.body(sf.window.width, w, h, sf.width.is_settled());
         let outline = shape::outline(form, shape_style, f.hangs(), w, h, radius, f.ear, s);
         // The pointer only reaches the island inside its body; everywhere
@@ -1877,10 +1923,10 @@ impl App {
             (sf.width.value.max(sf.width.target) * s).round(),
             (sf.height.value.max(sf.height.target) * s).round(),
         );
-        // A notch that floats (not against the screen's edge) keeps a region
-        // tall enough to put the pointer on, to bring the island back.
-        let rh = if dodged && !f.hangs() {
-            rh.max((DODGED_HOVER * s).round())
+        // A small island that floats (not against the screen's edge) keeps a
+        // region tall enough to put the pointer on, to bring it back.
+        let rh = if dodged {
+            dodge::hover_height(rh, f.hangs(), s).round()
         } else {
             rh
         };
@@ -2045,6 +2091,25 @@ impl App {
             }
         }
         let view = |n| shown(n, when, ring, orbit, since);
+        let dodge_look = if arrival > 0.0 {
+            match style {
+                DodgeStyle::Mini => Some(render::Dodged::Mini { dot: playing }),
+                DodgeStyle::Compact => Some(render::Dodged::Compact {
+                    spans: &compact,
+                    numbers: compact_numbers,
+                }),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        // The pill's shadow follows the line's size down, but stays under a
+        // mini or compact island (and a faded one: only `fade` dims it).
+        let shadow_presence = if style == DodgeStyle::Line {
+            presence
+        } else {
+            1.0
+        };
         let scene = render::Scene {
             page: self.page,
             tabs_clock: &clock,
@@ -2092,11 +2157,14 @@ impl App {
                 extent: shape::SHADOW_EXTENT * s,
                 drop: shape::SHADOW_DROP * s,
                 radius: shape::pill_radius(h, s).min(w / 2.0),
-                alpha: shape::SHADOW_ALPHA * presence,
+                alpha: shape::SHADOW_ALPHA * shadow_presence * fade,
             }),
             size: (sf.width.value.max(0.0), sf.height.value.max(0.0)),
             alpha,
             presence,
+            fade,
+            dodge: dodge_look,
+            arrival,
             track: self.track.as_ref(),
             position_ms: self.track.as_ref().map_or(0, |t| t.position_now()),
             empty: self.texts.nothing_playing,
@@ -2150,7 +2218,10 @@ impl App {
             // It shows the second rounded up: it changes on a whole one.
             let left = self.timer.left_ms(self.now_ms());
             sooner((left % 1000) as u32 + 15);
-        } else if self.surfaces[i].open {
+        } else if self.surfaces[i].open
+            || (self.track.is_none() && self.compact_dodged(i) && !clock_faked())
+        {
+            // The clock, on the tabs or in the compact island: its minute.
             let t = unsafe { GetLocalTime() };
             let into = u32::from(t.wSecond) * 1000 + u32::from(t.wMilliseconds);
             sooner(60_000u32.saturating_sub(into) + 15);
@@ -2256,7 +2327,7 @@ impl App {
                 .surfaces
                 .iter()
                 .find_map(|s| s.renderer.as_ref())
-                .map_or(0.0, |r| r.text_width(&spans, false));
+                .map_or(0.0, |r| r.text_width(&spans, render::Measure::Peek));
         }
         // A notice of the same kind (the volume again) just updates.
         let before = self.showing();
@@ -2625,6 +2696,57 @@ impl App {
         let muted = self.notice.is_some() && sf.muted;
         let passing = self.notice_at(i).is_some() || (self.peek && !muted);
         self.settings.dodge_windows && sf.dodging && !sf.open && !passing
+    }
+
+    /// Island `i` is making way as the compact style (its text may change).
+    fn compact_dodged(&self, i: usize) -> bool {
+        self.settings.dodge_style == DodgeStyle::Compact && self.dodged(i)
+    }
+
+    /// The size island `i` makes way to, on screen (the style's, at
+    /// `islandScale`, never more than its closed size now). `None` when it
+    /// keeps its size: the faded style.
+    fn dodge_size(&self, i: usize) -> Option<(f32, f32)> {
+        let l = self.look(i);
+        let w = if self.track.is_some() {
+            self.surfaces[i].closed_w
+        } else {
+            l.sizes.closed.0
+        };
+        dodge::size(
+            self.settings.dodge_style,
+            (w, l.sizes.closed.1),
+            self.compact_w,
+        )
+        .map(|s| dodge::scaled(s, l.scale))
+    }
+
+    /// What the compact island says: the song, or without one the focus
+    /// timer's time left (when the closed island would show it), or the
+    /// time of day. The flag: figures, drawn tabular.
+    fn compact_text(&self) -> (Vec<(String, bool)>, bool) {
+        if let Some(t) = &self.track {
+            return (self.song_text.spans(&t.title, &t.artist), false);
+        }
+        let active = self.timer.active(&self.settings.focus);
+        let timer = activity::closed(false, active, self.settings.dual_activity).0
+            == Some(activity::Activity::Timer);
+        let text = if timer {
+            focus::clock(self.timer.left_ms(self.now_ms()))
+        } else {
+            time_of_day()
+        };
+        (vec![(text, false)], true)
+    }
+
+    /// The pointer is on island `i`'s window region, or has left it. A
+    /// faded island that makes way is opaque while it is on (it opens soon
+    /// after, see HOVER_TIMER).
+    fn pointer_over(&mut self, i: usize, on: bool) {
+        let was = std::mem::replace(&mut self.surfaces[i].tracking, on);
+        if was != on && self.settings.dodge_style == DodgeStyle::Faded && self.dodged(i) {
+            self.retarget_surface(i);
+        }
     }
 
     /// Where island `i`'s closed body rests, in screen px (no ears): never
@@ -3072,12 +3194,27 @@ impl App {
             && let Some(t) = &self.track
         {
             let name = self.song_text.spans(&t.title, &t.artist);
-            self.name_w = r.text_width(&name, true);
+            self.name_w = r.text_width(&name, render::Measure::Closed);
             let line = match self.showing() {
                 Before::Line(l) => vec![(l, false)],
                 _ => name,
             };
-            self.peek_w = r.text_width(&line, false);
+            self.peek_w = r.text_width(&line, render::Measure::Peek);
+        }
+        // The compact island's width follows its text (read, with the
+        // clock, only while one island makes way).
+        if self.settings.dodge_style == DodgeStyle::Compact
+            && self.surfaces.iter().any(|s| s.dodging)
+        {
+            let (spans, numbers) = self.compact_text();
+            if let Some(r) = self.surfaces.iter().find_map(|s| s.renderer.as_ref()) {
+                let which = if numbers {
+                    render::Measure::CompactNumbers
+                } else {
+                    render::Measure::Compact
+                };
+                self.compact_w = r.text_width(&spans, which);
+            }
         }
         // Each island at its own sizes, new ones too.
         for sf in &mut self.surfaces {
@@ -3249,21 +3386,39 @@ impl App {
             let (w, h) = self.peek_unscaled_at(i);
             (w * k, h * k)
         };
+        let dodge_to = self.dodge_size(i);
+        // Faded: opaque again while the pointer is on it.
+        let fade_to = if dodged
+            && self.settings.dodge_style == DodgeStyle::Faded
+            && !self.surfaces[i].tracking
+        {
+            dodge::opacity(self.settings.dodge_opacity) * 100.0
+        } else {
+            100.0
+        };
         let sf = &mut self.surfaces[i];
-        let (w, h) = if sf.open {
-            sf.open_size()
-        } else if dodged {
-            // A window's top edge is under the island: a small notch, also
-            // over the lyrics' glance (passing glances are never dodged).
-            (dodge::NOTCH.0 * k, dodge::NOTCH.1 * k)
-        } else if peeking {
-            peek_size
-        } else if track_some {
+        if dodged && let Some(d) = dodge_to {
+            sf.dodge_from = Some(d.1);
+        }
+        let closed = if track_some {
             // Wide enough for the song's name.
             (sf.closed_w * k, l.sizes.closed.1 * k)
         } else {
             (l.sizes.closed.0 * k, l.sizes.closed.1 * k)
         };
+        let (w, h) = if sf.open {
+            sf.open_size()
+        } else if dodged {
+            // A window's top edge is under the island: the style's small
+            // size, also over the lyrics' glance (passing glances are never
+            // dodged); a faded island keeps its closed size.
+            dodge_to.unwrap_or(closed)
+        } else if peeking {
+            peek_size
+        } else {
+            closed
+        };
+        sf.fade.target = fade_to;
         if h != sf.height.target {
             sf.shrinking = h < sf.height.value;
         }
@@ -3330,7 +3485,9 @@ impl App {
             };
             geometry = sf.width.advance(&pw, ms) | sf.height.advance(&ph, ms);
             let bubble_moving = sf.bubble.advance(&pb, ms);
-            moving = geometry | bubble_moving;
+            // The fade is no geometry: the content still snaps to pixels.
+            let fade_moving = sf.fade.advance(&pb, ms);
+            moving = geometry | bubble_moving | fade_moving;
             if let Some((_, at)) = &sf.swap {
                 if at.elapsed().as_secs_f32() * 1000.0 < SWAP_MS {
                     moving = true;
@@ -3891,7 +4048,8 @@ impl App {
                         hwndTrack: hwnd,
                         dwHoverTime: 0,
                     };
-                    self.surfaces[i].tracking = unsafe { TrackMouseEvent(&mut t) }.is_ok();
+                    let on = unsafe { TrackMouseEvent(&mut t) }.is_ok();
+                    self.pointer_over(i, on);
                     if !self.surfaces[i].open {
                         unsafe { SetTimer(Some(hwnd), HOVER_TIMER, HOVER_DELAY_MS, None) };
                     }
@@ -3923,7 +4081,7 @@ impl App {
             }
             WM_MOUSELEAVE => {
                 self.set_hot(i, None, false);
-                self.surfaces[i].tracking = false;
+                self.pointer_over(i, false);
                 self.surfaces[i].on_bubble = false;
                 self.surfaces[i].bubble_hold = None;
                 unsafe {
@@ -3967,10 +4125,16 @@ impl App {
                 }
             }
             WM_TIMER if wp.0 == TICK_TIMER => {
-                if self.surfaces[i].last_frame.is_none() {
-                    self.draw_surface(i);
+                if self.compact_dodged(i) {
+                    // Its text changed, and so may its width; this also
+                    // draws, and sets the next tick.
+                    self.retarget_surface(i);
+                } else {
+                    if self.surfaces[i].last_frame.is_none() {
+                        self.draw_surface(i);
+                    }
+                    self.tick_surface(i);
                 }
-                self.tick_surface(i);
             }
             WM_TIMER if wp.0 == LYRIC_TIMER => self.follow_lyrics(),
             WM_MOUSEWHEEL => {
@@ -4257,6 +4421,19 @@ impl App {
             (
                 MENU_DODGE,
                 row(toggle, t.dodge_windows, self.settings.dodge_windows, true),
+            ),
+            (
+                MENU_DODGE_STYLE,
+                choice(
+                    t.dodge_style,
+                    match self.settings.dodge_style {
+                        DodgeStyle::Mini => t.dodge_mini,
+                        DodgeStyle::Compact => t.dodge_compact,
+                        DodgeStyle::Faded => t.dodge_faded,
+                        DodgeStyle::Line => t.dodge_line,
+                    },
+                    self.settings.dodge_windows,
+                ),
             ),
             (
                 MENU_LANGUAGE,
@@ -4940,6 +5117,20 @@ impl App {
                 self.apply(file);
                 return;
             }
+            MENU_DODGE_STYLE => {
+                file.dodge_style = self.settings.dodge_style.next();
+                let name = file.dodge_style.name();
+                if qa_mode() {
+                    // Kept in the script's settings: a later `set` must not
+                    // bring the old one back.
+                    #[cfg(feature = "qa")]
+                    qa::menu_set(None, "dodgeStyle", Value::String(name.into()));
+                } else {
+                    let _ = settings_file::set("dodgeStyle", Value::String(name.into()));
+                }
+                self.apply(file);
+                return;
+            }
             MENU_LANGUAGE => {
                 file.language = settings::next_language(self.settings.language);
                 if !qa_mode() {
@@ -5147,6 +5338,11 @@ fn ui_language() -> String {
 
 /// The time of day as the user's locale writes it, without seconds.
 fn time_of_day() -> String {
+    // A QA script may set the time (so the grabs repeat).
+    #[cfg(feature = "qa")]
+    if let Some(c) = qa::clock() {
+        return c;
+    }
     // A custom format can take up to 80 characters (LOCALE_STIMEFORMAT).
     let mut buf = [0u16; 81];
     let n = unsafe {
@@ -5159,6 +5355,19 @@ fn time_of_day() -> String {
         )
     };
     String::from_utf16_lossy(&buf[..(n.max(1) - 1) as usize])
+}
+
+/// A QA script has set the time of day: nothing is waited for at the
+/// minute's end then.
+fn clock_faked() -> bool {
+    #[cfg(feature = "qa")]
+    {
+        qa::clock().is_some()
+    }
+    #[cfg(not(feature = "qa"))]
+    {
+        false
+    }
 }
 
 /// The value after `--name` on the command line.
@@ -5397,6 +5606,7 @@ fn main() -> Result<()> {
             // Fitted to the screen by the first layout.
             peek_w: 0.0,
             name_w: 0.0,
+            compact_w: 0.0,
             page: defaults.default_page,
             page_from: None,
             hot: None,
